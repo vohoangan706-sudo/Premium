@@ -1,0 +1,1581 @@
+--[[
+    Terminalpanel Premium
+    ------------------------------------------------------------
+    Place this as a second LocalScript inside StarterPlayerScripts,
+    alongside the main TerminalPanel script.
+
+    This is a fully separate script on purpose: it has its own
+    Luau 200-local-variable budget, independent of the main
+    TerminalPanel script. All the admin-exclusive tools that used
+    to live inside TerminalPanel (admincheck, check2, godmode) have
+    been moved here so the main script has headroom again.
+
+    If the local player's UserId isn't in ADMIN_USER_IDS below, this
+    entire script does nothing at all — no UI is created, nothing is
+    visible, nothing is discoverable. That's stronger hiding than
+    per-command checks can offer, since there's no shared panel for
+    a non-admin to even probe with command names.
+--]]
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+
+local player = Players.LocalPlayer
+
+-- Fill in your own UserId(s) here. This only hides the panel from
+-- everyone else — it's a LocalScript check, so it can't be made
+-- tamper-proof against someone editing their own client. True
+-- enforcement would need a server Script + RemoteEvent.
+local ADMIN_USER_IDS = {
+	3101624536,
+	11535922291,
+	11517308890,
+}
+
+if not table.find(ADMIN_USER_IDS, player.UserId) then
+	return -- not an admin: nothing below this line ever runs for you
+end
+
+-------------------------------------------------
+-- GUI SETUP
+-- Same look and pattern as the main TerminalPanel: dark background,
+-- green terminal text, draggable + minimizable frame with a
+-- scrolling console and a command input box.
+-------------------------------------------------
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "TerminalPanelPremium"
+screenGui.ResetOnSpawn = false
+screenGui.Parent = player:WaitForChild("PlayerGui")
+
+local outputFrame
+local inputBox
+
+do
+	local frame = Instance.new("Frame")
+	frame.Size = UDim2.new(0, 480, 0, 320)
+	frame.Position = UDim2.new(0.5, -240, 0.5, 60)
+	frame.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
+	frame.BorderSizePixel = 0
+	frame.Parent = screenGui
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 6)
+	corner.Parent = frame
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = Color3.fromRGB(255, 200, 0)
+	stroke.Thickness = 1.5
+	stroke.Parent = frame
+
+	-- Title bar (amber instead of the main panel's green, so the two
+	-- are easy to tell apart at a glance)
+	local titleBar = Instance.new("Frame")
+	titleBar.Size = UDim2.new(1, 0, 0, 28)
+	titleBar.BackgroundColor3 = Color3.fromRGB(35, 25, 0)
+	titleBar.BorderSizePixel = 0
+	titleBar.Parent = frame
+
+	local titleCorner = Instance.new("UICorner")
+	titleCorner.CornerRadius = UDim.new(0, 6)
+	titleCorner.Parent = titleBar
+
+	local titleLabel = Instance.new("TextLabel")
+	titleLabel.Size = UDim2.new(1, -46, 1, 0)
+	titleLabel.Position = UDim2.new(0, 10, 0, 0)
+	titleLabel.BackgroundTransparency = 1
+	titleLabel.Text = "root@premium:~$"
+	titleLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
+	titleLabel.Font = Enum.Font.Code
+	titleLabel.TextSize = 16
+	titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+	titleLabel.Parent = titleBar
+
+	local minimizeButton = Instance.new("TextButton")
+	minimizeButton.Name = "MinimizeButton"
+	minimizeButton.Size = UDim2.new(0, 28, 0, 20)
+	minimizeButton.Position = UDim2.new(1, -34, 0.5, -10)
+	minimizeButton.BackgroundColor3 = Color3.fromRGB(60, 45, 0)
+	minimizeButton.TextColor3 = Color3.fromRGB(255, 200, 0)
+	minimizeButton.Font = Enum.Font.Code
+	minimizeButton.TextSize = 18
+	minimizeButton.Text = "-"
+	minimizeButton.Parent = titleBar
+
+	local minimizeButtonCorner = Instance.new("UICorner")
+	minimizeButtonCorner.CornerRadius = UDim.new(0, 4)
+	minimizeButtonCorner.Parent = minimizeButton
+
+	local minimizedBox = Instance.new("ImageButton")
+	minimizedBox.Name = "MinimizedBox"
+	minimizedBox.Size = UDim2.new(0, 44, 0, 44)
+	minimizedBox.Position = UDim2.new(0.5, -22, 0.5, -22)
+	minimizedBox.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
+	minimizedBox.Image = ""
+	minimizedBox.ScaleType = Enum.ScaleType.Fit
+	minimizedBox.Visible = false
+	minimizedBox.Parent = screenGui
+
+	local minimizedBoxCorner = Instance.new("UICorner")
+	minimizedBoxCorner.CornerRadius = UDim.new(0, 8)
+	minimizedBoxCorner.Parent = minimizedBox
+
+	local minimizedBoxStroke = Instance.new("UIStroke")
+	minimizedBoxStroke.Color = Color3.fromRGB(255, 200, 0)
+	minimizedBoxStroke.Thickness = 1.5
+	minimizedBoxStroke.Parent = minimizedBox
+
+	outputFrame = Instance.new("ScrollingFrame")
+	outputFrame.Size = UDim2.new(1, -16, 1, -76)
+	outputFrame.Position = UDim2.new(0, 8, 0, 32)
+	outputFrame.BackgroundTransparency = 1
+	outputFrame.BorderSizePixel = 0
+	outputFrame.ScrollBarThickness = 4
+	outputFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+	outputFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	outputFrame.Parent = frame
+
+	local outputLayout = Instance.new("UIListLayout")
+	outputLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	outputLayout.Parent = outputFrame
+
+	inputBox = Instance.new("TextBox")
+	inputBox.Size = UDim2.new(1, -16, 0, 32)
+	inputBox.Position = UDim2.new(0, 8, 1, -36)
+	inputBox.BackgroundColor3 = Color3.fromRGB(20, 15, 0)
+	inputBox.TextColor3 = Color3.fromRGB(255, 200, 0)
+	inputBox.PlaceholderText = "type a command..."
+	inputBox.PlaceholderColor3 = Color3.fromRGB(120, 95, 0)
+	inputBox.Font = Enum.Font.Code
+	inputBox.TextSize = 16
+	inputBox.ClearTextOnFocus = false
+	inputBox.Text = ""
+	inputBox.TextXAlignment = Enum.TextXAlignment.Left
+	inputBox.Parent = frame
+
+	local inputCorner = Instance.new("UICorner")
+	inputCorner.CornerRadius = UDim.new(0, 4)
+	inputCorner.Parent = inputBox
+
+	local inputPadding = Instance.new("UIPadding")
+	inputPadding.PaddingLeft = UDim.new(0, 8)
+	inputPadding.Parent = inputBox
+
+	titleBar.Active = true
+
+	local dragging = false
+	local dragInput
+	local dragStart
+	local startPos
+
+	titleBar.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true
+			dragStart = input.Position
+			startPos = frame.Position
+
+			input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then
+					dragging = false
+				end
+			end)
+		end
+	end)
+
+	titleBar.InputChanged:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch then
+			dragInput = input
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if input == dragInput and dragging then
+			local delta = input.Position - dragStart
+			frame.Position = UDim2.new(
+				startPos.X.Scale, startPos.X.Offset + delta.X,
+				startPos.Y.Scale, startPos.Y.Offset + delta.Y
+			)
+		end
+	end)
+
+	local function minimizePanel()
+		frame.Visible = false
+		minimizedBox.Position = frame.Position
+		minimizedBox.Visible = true
+	end
+
+	local function restorePanel()
+		minimizedBox.Visible = false
+		frame.Visible = true
+	end
+
+	minimizeButton.MouseButton1Click:Connect(minimizePanel)
+
+	local minimizedDragging = false
+	local minimizedDragInput
+	local minimizedDragStart
+	local minimizedStartPos
+	local minimizedMoved = false
+
+	minimizedBox.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+			minimizedDragging = true
+			minimizedMoved = false
+			minimizedDragStart = input.Position
+			minimizedStartPos = minimizedBox.Position
+
+			input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then
+					minimizedDragging = false
+					if not minimizedMoved then
+						restorePanel()
+					end
+				end
+			end)
+		end
+	end)
+
+	minimizedBox.InputChanged:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch then
+			minimizedDragInput = input
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if input == minimizedDragInput and minimizedDragging then
+			local delta = input.Position - minimizedDragStart
+			if delta.Magnitude > 5 then
+				minimizedMoved = true
+			end
+			minimizedBox.Position = UDim2.new(
+				minimizedStartPos.X.Scale, minimizedStartPos.X.Offset + delta.X,
+				minimizedStartPos.Y.Scale, minimizedStartPos.Y.Offset + delta.Y
+			)
+		end
+	end)
+end
+
+-------------------------------------------------
+-- CONSOLE OUTPUT HELPERS
+-------------------------------------------------
+
+local function addLine(text, color)
+	local line = Instance.new("TextLabel")
+	line.Size = UDim2.new(1, 0, 0, 18)
+	line.BackgroundTransparency = 1
+	line.Text = text
+	line.TextColor3 = color or Color3.fromRGB(255, 200, 0)
+	line.Font = Enum.Font.Code
+	line.TextSize = 15
+	line.TextXAlignment = Enum.TextXAlignment.Left
+	line.TextWrapped = true
+	line.Parent = outputFrame
+	outputFrame.CanvasPosition = Vector2.new(0, math.huge)
+	return line
+end
+
+local function clearConsole()
+	for _, child in ipairs(outputFrame:GetChildren()) do
+		if child:IsA("TextLabel") then
+			child:Destroy()
+		end
+	end
+end
+
+-------------------------------------------------
+-- SHARED HELPERS
+-- Own copies, independent of the main TerminalPanel script — this
+-- script can't reach into another script's locals, so the void
+-- platform/loop/toggle mechanics are duplicated here rather than
+-- shared. Functionally identical to the main script's versions.
+-------------------------------------------------
+
+local function createToggle(signal, onTick, onStart, onStop)
+	local connection = nil
+	local function isOn()
+		return connection ~= nil
+	end
+	local function turnOn()
+		if connection then return end
+		if onStart then onStart() end
+		connection = signal:Connect(onTick)
+	end
+	local function turnOff()
+		if not connection then return end
+		connection:Disconnect()
+		connection = nil
+		if onStop then onStop() end
+	end
+	return turnOn, turnOff, isOn
+end
+
+local VOID_POSITION = Vector3.new(0, -500, 0)
+local VOID_PLATFORM_SIZE = Vector3.new(4000, 0.5, 4000)
+local voidPlatform = nil
+
+local function createVoidPlatform()
+	if voidPlatform then return voidPlatform end
+
+	local platform = Instance.new("Part")
+	platform.Name = "VoidPlatformPremium"
+	platform.Size = VOID_PLATFORM_SIZE
+	platform.Position = VOID_POSITION - Vector3.new(0, VOID_PLATFORM_SIZE.Y / 2, 0)
+	platform.Anchored = true
+	platform.CanCollide = true
+	platform.Material = Enum.Material.Glass
+	platform.Color = Color3.fromRGB(210, 235, 255)
+	platform.Transparency = 0.55
+	platform.Reflectance = 0.15
+	platform.Parent = workspace
+
+	voidPlatform = platform
+	return platform
+end
+
+local function getVoidPosition()
+	return VOID_POSITION
+end
+
+-- Shared "park here forever" mechanic: keeps re-snapping the HRP to
+-- whatever `getPosition()` currently returns, every frame, until
+-- stopped.
+local function createVoidLoop(getPosition)
+	local connection = nil
+	local function isActive()
+		return connection ~= nil
+	end
+	local function startLoop()
+		if connection then return end
+		local char = player.Character
+		local hrp = char and char:FindFirstChild("HumanoidRootPart")
+		if hrp then
+			hrp.CFrame = CFrame.new(getPosition())
+		end
+		connection = RunService.Heartbeat:Connect(function()
+			local currentChar = player.Character
+			local currentHrp = currentChar and currentChar:FindFirstChild("HumanoidRootPart")
+			if currentHrp then
+				currentHrp.CFrame = CFrame.new(getPosition())
+			end
+		end)
+	end
+	local function stopLoop()
+		if connection then
+			connection:Disconnect()
+			connection = nil
+		end
+	end
+	return startLoop, stopLoop, isActive
+end
+
+-------------------------------------------------
+-- ADMIN CHECK (shared player-selection state)
+-------------------------------------------------
+
+local adminCheckFrame = nil
+local selectedCheckPlayers = {} -- ordered list of Player instances, no cap
+
+local function isPlayerSelected(targetPlayer)
+	return table.find(selectedCheckPlayers, targetPlayer) ~= nil
+end
+
+local function toggleCheckSelection(targetPlayer)
+	local index = table.find(selectedCheckPlayers, targetPlayer)
+	if index then
+		table.remove(selectedCheckPlayers, index)
+		return true
+	end
+	table.insert(selectedCheckPlayers, targetPlayer)
+	return true
+end
+
+-- Your game's existing status-check hotkey, simulated via
+-- VirtualInputManager. Note: this API is restricted to Studio/plugin
+-- contexts on Roblox — it may do nothing (silently, via the pcall)
+-- once this script is running in a real published game rather than
+-- in Studio.
+local function runAdminKeyCheck()
+	local ok, err = pcall(function()
+		VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Three, false, game)
+		task.wait(0.03)
+		VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Three, false, game)
+	end)
+	if not ok then
+		warn("3 key simulation failed:", err)
+	end
+end
+
+local adminCheckReturnCFrame = nil
+local adminVoidLoopStart, adminVoidLoopStop, adminCheckParked = createVoidLoop(getVoidPosition)
+
+local ADMIN_ORBIT_RADIUS = 3 -- small enough to stay in contact with the target's hitbox
+local ADMIN_ORBIT_SPEED = 50 -- studs/second along the circle
+
+-- Circles your character tightly around a target's HRP for `duration`
+-- seconds, close enough that your hitbox stays touching theirs the
+-- whole time.
+local function orbitTargetBriefly(targetHrp, duration)
+	local startTime = os.clock()
+	local angularSpeed = ADMIN_ORBIT_SPEED / ADMIN_ORBIT_RADIUS -- rad/sec
+
+	while os.clock() - startTime < duration do
+		if not targetHrp.Parent then break end
+		local char = player.Character
+		local hrp = char and char:FindFirstChild("HumanoidRootPart")
+		if not hrp then break end
+
+		local elapsed = os.clock() - startTime
+		local angle = angularSpeed * elapsed
+		local centerPos = targetHrp.Position
+		local offset = Vector3.new(math.cos(angle) * ADMIN_ORBIT_RADIUS, 0, math.sin(angle) * ADMIN_ORBIT_RADIUS)
+		hrp.CFrame = CFrame.new(centerPos + offset, centerPos)
+
+		task.wait()
+	end
+end
+
+local function getSelectedTargetHrps()
+	local targetHrps = {}
+	for _, targetPlayer in ipairs(selectedCheckPlayers) do
+		local targetChar = targetPlayer.Character
+		local targetHrp = targetChar and targetChar:FindFirstChild("HumanoidRootPart")
+		if targetHrp then
+			table.insert(targetHrps, targetHrp)
+		end
+	end
+	return targetHrps
+end
+
+-- admincheck: key 3 -> wait -> orbit-sweep every selected player
+-- (bounded to ~1s total) -> park on the void platform on a loop.
+local function runAdminCheckSequence()
+	createVoidPlatform()
+
+	local startChar = player.Character
+	local startHrp = startChar and startChar:FindFirstChild("HumanoidRootPart")
+	if startHrp then
+		adminCheckReturnCFrame = startHrp.CFrame
+	end
+
+	runAdminKeyCheck()
+	task.wait(0.5)
+
+	local targetHrps = getSelectedTargetHrps()
+	if #targetHrps > 0 then
+		local perStep = 1 / #targetHrps
+		for _, targetHrp in ipairs(targetHrps) do
+			orbitTargetBriefly(targetHrp, perStep)
+		end
+	end
+
+	adminVoidLoopStart()
+end
+
+-- Stops the loop and returns you to wherever you were right before
+-- the check sequence started.
+local function returnFromAdminCheck()
+	adminVoidLoopStop()
+
+	local char = player.Character
+	local hrp = char and char:FindFirstChild("HumanoidRootPart")
+	if hrp and adminCheckReturnCFrame then
+		hrp.CFrame = adminCheckReturnCFrame
+	end
+	adminCheckReturnCFrame = nil
+end
+
+-- check2: same key-3 + orbit-sweep idea, but bounded to 0.5s total,
+-- then a brief stop on the void platform before dropping to -10000y
+-- and anchoring there instead of staying on the platform loop.
+local check2Parked = false
+
+local function runCheck2Sequence()
+	createVoidPlatform()
+
+	runAdminKeyCheck()
+	task.wait(0.4)
+
+	local targetHrps = getSelectedTargetHrps()
+	if #targetHrps > 0 then
+		local perStep = 0.7 / #targetHrps
+		for _, targetHrp in ipairs(targetHrps) do
+			orbitTargetBriefly(targetHrp, perStep)
+		end
+	end
+
+	adminVoidLoopStart()
+	task.wait(0.3)
+	adminVoidLoopStop()
+
+	local char = player.Character
+	local hrp = char and char:FindFirstChild("HumanoidRootPart")
+	if hrp then
+		hrp.CFrame = CFrame.new(0, -10000, 0)
+		hrp.Anchored = true
+	end
+	check2Parked = true
+end
+
+-------------------------------------------------
+-- GODMODE (Option B: stay at 0 HP, but stay mobile)
+-- Drops your Health to 0 via the void, but disables Roblox's Dead
+-- state first so you never ragdoll, never get locked out of
+-- movement, and never respawn — you just stay fully mobile at 0 HP.
+-- Since most games' damage code checks "if health <= 0, do nothing,"
+-- further hits can't affect you. R6 animations are force-applied so
+-- the corpse still walks/idles normally.
+--
+-- Caveat: this only works if Health/death for your own character is
+-- decided client-side (the common case, since your own Humanoid is
+-- usually network-owned by your own client). If your game's kill or
+-- respawn logic is authoritative on the server, it can still force a
+-- real respawn regardless of what this script does — if that
+-- happens, the CharacterAdded handler below detects it and
+-- automatically re-runs the whole sequence on the new character, so
+-- it keeps re-answering every forced respawn rather than staying
+-- broken after the first one.
+-------------------------------------------------
+
+local GODMODE_RESET_Y = -10000
+local GODMODE_KILL_TIMEOUT = 3 -- give the void up to this long to actually zero your Health
+
+local R6_DEFAULT_ANIMATIONS = {
+	idle1 = "180435571", idle2 = "180435792",
+	walk = "180426354", run = "180426354",
+	jump = "125750702", fall = "180436148",
+	climb = "180436334", sit = "178130996",
+}
+
+local function applyDefaultR6Animations(char)
+	local animate = char and char:FindFirstChild("Animate")
+	if not animate then return end
+
+	local function setAnim(container, childName, animId)
+		local child = container and container:FindFirstChild(childName)
+		local animValue = child and child:FindFirstChild("AnimationId")
+		if animValue then
+			animValue.Value = "rbxassetid://" .. animId
+		end
+	end
+
+	local idle = animate:FindFirstChild("idle")
+	setAnim(idle, "Animation1", R6_DEFAULT_ANIMATIONS.idle1)
+	setAnim(idle, "Animation2", R6_DEFAULT_ANIMATIONS.idle2)
+	setAnim(animate:FindFirstChild("walk"), "WalkAnim", R6_DEFAULT_ANIMATIONS.walk)
+	setAnim(animate:FindFirstChild("run"), "RunAnim", R6_DEFAULT_ANIMATIONS.run)
+	setAnim(animate:FindFirstChild("jump"), "JumpAnim", R6_DEFAULT_ANIMATIONS.jump)
+	setAnim(animate:FindFirstChild("fall"), "FallAnim", R6_DEFAULT_ANIMATIONS.fall)
+	setAnim(animate:FindFirstChild("climb"), "ClimbAnim", R6_DEFAULT_ANIMATIONS.climb)
+	setAnim(animate:FindFirstChild("sit"), "Sit", R6_DEFAULT_ANIMATIONS.sit)
+end
+
+local godmodeActive = false
+
+local function isGodmode()
+	return godmodeActive
+end
+
+-- Runs the full drop-and-lock sequence on whatever character is
+-- currently loaded. Safe to call again on a fresh character (e.g.
+-- after a forced respawn) — it doesn't depend on any state from a
+-- previous character.
+local function activateGodmode()
+	local char = player.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	local hrp = char and char:FindFirstChild("HumanoidRootPart")
+	if not (char and hum and hrp) then return false end
+
+	-- Disabling the Dead state BEFORE Health hits 0 is what prevents
+	-- the ragdoll/lock-out/respawn from ever kicking in once it does.
+	hum:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
+	hum.BreakJointsOnDeath = false
+
+	local returnCFrame = hrp.CFrame
+	hrp.CFrame = CFrame.new(hrp.Position.X, GODMODE_RESET_Y, hrp.Position.Z)
+
+	local waited = 0
+	while hum.Health > 0 and waited < GODMODE_KILL_TIMEOUT do
+		task.wait(0.1)
+		waited += 0.1
+	end
+
+	-- Back to solid ground — corpse, 0 HP, and all — instead of
+	-- staying physically parked in the void.
+	local currentChar = player.Character
+	local currentHrp = currentChar and currentChar:FindFirstChild("HumanoidRootPart")
+	if currentHrp then
+		currentHrp.CFrame = returnCFrame
+	end
+	applyDefaultR6Animations(currentChar)
+
+	godmodeActive = true
+	return true
+end
+
+local function deactivateGodmode()
+	local char = player.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if hum then
+		hum:SetStateEnabled(Enum.HumanoidStateType.Dead, true)
+		hum.Health = hum.MaxHealth
+	end
+	godmodeActive = false
+end
+
+-- Single respawn handler covering every persistent state above.
+player.CharacterAdded:Connect(function(newChar)
+	if adminCheckParked() then
+		adminVoidLoopStop()
+		adminCheckReturnCFrame = nil
+	end
+
+	if check2Parked then
+		local newHrp = newChar:WaitForChild("HumanoidRootPart", 5)
+		if newHrp and newHrp.Anchored then
+			newHrp.Anchored = false
+		end
+		check2Parked = false
+	end
+
+	if godmodeActive then
+		-- A real respawn only happens here if your game's kill/respawn
+		-- logic is server-authoritative and forced it despite the Dead
+		-- state trick. Re-run the whole sequence on the new character
+		-- so it keeps re-answering every forced respawn.
+		task.spawn(function()
+			newChar:WaitForChild("HumanoidRootPart", 5)
+			activateGodmode()
+		end)
+	end
+end)
+
+-------------------------------------------------
+-- GODMODE2 (Option A: keep Health pinned at max)
+-- No void, no death, no animation swapping — just a loop that
+-- watches your own Health and instantly restores it to MaxHealth the
+-- moment it drops. Anything that hurts you through Humanoid.Health or
+-- :TakeDamage() (melee, guns, fall damage, most void/hazard kills)
+-- gets undone before the game's own death-check ever sees a low
+-- number. Doesn't help against anything that ends you WITHOUT going
+-- through Health — character:Destroy(), player:Kick(), a kill-brick
+-- that removes you directly instead of damaging you, etc. Those skip
+-- Health entirely, so there's nothing here for this to restore.
+-------------------------------------------------
+
+local godmode2On, godmode2Off, isGodmode2 = createToggle(RunService.Heartbeat, function()
+	local char = player.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if hum and hum.Health < hum.MaxHealth then
+		hum.Health = hum.MaxHealth
+	end
+end)
+
+-------------------------------------------------
+-- GODMODE VISUAL INDICATOR
+-- The bar in the screenshot is your own game's custom on-screen HUD
+-- health bar (a 2D GuiObject in your PlayerGui) — not Roblox's 3D
+-- above-head billboard, and not part of CoreGui, so there's no fixed
+-- API to grab it by. This searches your PlayerGui for anything whose
+-- name looks like a health bar, hides it while godmode is active, and
+-- places a replacement in the exact same parent with the exact same
+-- Size/Position/AnchorPoint — since it's copied directly rather than
+-- estimated, the scale/position match perfectly regardless of screen
+-- size, because the same UDim2 values resolve identically inside the
+-- same parent container.
+--
+-- If your health bar's Instance name doesn't contain "health" or
+-- "hp", this search won't find it — tell me its actual name (check
+-- via Studio's Explorer under PlayerGui) and I'll target it directly
+-- instead of relying on the guess.
+-------------------------------------------------
+
+local function findGameHealthBar()
+	local playerGui = player:FindFirstChild("PlayerGui")
+	if not playerGui then return nil end
+
+	local function scan(instance, depth)
+		if depth > 8 then return nil end
+		for _, child in ipairs(instance:GetChildren()) do
+			if child:IsA("GuiObject") then
+				local nameLower = child.Name:lower()
+				if nameLower:find("health") or nameLower:find("hpbar") or nameLower == "hp" then
+					return child
+				end
+			end
+			local found = scan(child, depth + 1)
+			if found then return found end
+		end
+		return nil
+	end
+
+	return scan(playerGui, 0)
+end
+
+local godmodeHealthBarOriginal = nil
+local godmodeReplacementBar = nil
+
+local function destroyGodmodeReplacementBar()
+	if godmodeReplacementBar then
+		godmodeReplacementBar:Destroy()
+	end
+	godmodeReplacementBar = nil
+	if godmodeHealthBarOriginal then
+		godmodeHealthBarOriginal.Visible = true
+	end
+	godmodeHealthBarOriginal = nil
+end
+
+local function createGodmodeReplacementBar(original)
+	godmodeHealthBarOriginal = original
+	original.Visible = false
+
+	local bar = Instance.new("Frame")
+	bar.Name = "GodmodeHealthBarReplacement"
+	bar.Size = original.Size
+	bar.Position = original.Position
+	bar.AnchorPoint = original.AnchorPoint
+	bar.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+	bar.BorderSizePixel = 0
+	bar.ZIndex = original.ZIndex + 1
+	bar.Parent = original.Parent
+
+	-- Match the original's rounding if it has a UICorner, so the
+	-- pill shape carries over instead of showing square corners.
+	local originalCorner = original:FindFirstChildOfClass("UICorner")
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = originalCorner and originalCorner.CornerRadius or UDim.new(1, 0)
+	corner.Parent = bar
+
+	local originalStroke = original:FindFirstChildOfClass("UIStroke")
+	if originalStroke then
+		local stroke = Instance.new("UIStroke")
+		stroke.Color = originalStroke.Color
+		stroke.Thickness = originalStroke.Thickness
+		stroke.Parent = bar
+	end
+
+	godmodeReplacementBar = bar
+end
+
+RunService.Heartbeat:Connect(function()
+	local active = isGodmode() or isGodmode2()
+
+	if active then
+		if not godmodeReplacementBar or not godmodeReplacementBar.Parent then
+			local found = findGameHealthBar()
+			if found then
+				createGodmodeReplacementBar(found)
+			end
+		end
+		if godmodeReplacementBar then
+			local hue = (os.clock() % 2) / 2 -- full rainbow cycle every 2 seconds
+			godmodeReplacementBar.BackgroundColor3 = Color3.fromHSV(hue, 1, 1)
+		end
+	else
+		if godmodeReplacementBar then
+			destroyGodmodeReplacementBar()
+		end
+	end
+end)
+
+-------------------------------------------------
+-- GODMODE CONFIRM POPUP
+-- StarterGui:SetCore("SendNotification", {..., Callback = fn}) looks
+-- like the right tool for a Yes/No prompt, but its Callback bridge is
+-- unreliable on live Roblox clients — pressing the button often does
+-- nothing at all, silently. Same failure shape as the restricted
+-- APIs elsewhere in this project (VirtualInputManager, InsertService):
+-- it doesn't error, it just doesn't run. This is a small custom
+-- popup instead, built the same way as every other panel here, so
+-- it's guaranteed to actually fire when pressed.
+-------------------------------------------------
+
+local godmodeConfirmFrame = nil
+
+local function createGodmodeConfirmPopup()
+	if godmodeConfirmFrame then return godmodeConfirmFrame end
+
+	local frame = Instance.new("Frame")
+	frame.Name = "GodmodeConfirm"
+	frame.Size = UDim2.new(0, 260, 0, 120)
+	frame.Position = UDim2.new(0.5, -130, 0.3, 0)
+	frame.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
+	frame.BorderSizePixel = 0
+	frame.Visible = false
+	frame.Parent = screenGui
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 6)
+	corner.Parent = frame
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = Color3.fromRGB(255, 200, 0)
+	stroke.Thickness = 1.5
+	stroke.Parent = frame
+
+	local titleLabel = Instance.new("TextLabel")
+	titleLabel.Size = UDim2.new(1, -16, 0, 22)
+	titleLabel.Position = UDim2.new(0, 8, 0, 8)
+	titleLabel.BackgroundTransparency = 1
+	titleLabel.Text = "Enable Godmode?"
+	titleLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
+	titleLabel.Font = Enum.Font.Code
+	titleLabel.TextSize = 16
+	titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+	titleLabel.Parent = frame
+
+	local textLabel = Instance.new("TextLabel")
+	textLabel.Size = UDim2.new(1, -16, 0, 36)
+	textLabel.Position = UDim2.new(0, 8, 0, 32)
+	textLabel.BackgroundTransparency = 1
+	textLabel.Text = "Your character will continuously reset."
+	textLabel.TextColor3 = Color3.fromRGB(255, 220, 120)
+	textLabel.Font = Enum.Font.Code
+	textLabel.TextSize = 13
+	textLabel.TextWrapped = true
+	textLabel.TextXAlignment = Enum.TextXAlignment.Left
+	textLabel.TextYAlignment = Enum.TextYAlignment.Top
+	textLabel.Parent = frame
+
+	local yesButton = Instance.new("TextButton")
+	yesButton.Size = UDim2.new(0.5, -12, 0, 28)
+	yesButton.Position = UDim2.new(0, 8, 1, -36)
+	yesButton.BackgroundColor3 = Color3.fromRGB(60, 45, 0)
+	yesButton.TextColor3 = Color3.fromRGB(255, 200, 0)
+	yesButton.Font = Enum.Font.Code
+	yesButton.TextSize = 15
+	yesButton.Text = "Yes"
+	yesButton.Parent = frame
+
+	local yesCorner = Instance.new("UICorner")
+	yesCorner.CornerRadius = UDim.new(0, 4)
+	yesCorner.Parent = yesButton
+
+	local noButton = Instance.new("TextButton")
+	noButton.Size = UDim2.new(0.5, -12, 0, 28)
+	noButton.Position = UDim2.new(0.5, 4, 1, -36)
+	noButton.BackgroundColor3 = Color3.fromRGB(40, 10, 10)
+	noButton.TextColor3 = Color3.fromRGB(255, 150, 150)
+	noButton.Font = Enum.Font.Code
+	noButton.TextSize = 15
+	noButton.Text = "No"
+	noButton.Parent = frame
+
+	local noCorner = Instance.new("UICorner")
+	noCorner.CornerRadius = UDim.new(0, 4)
+	noCorner.Parent = noButton
+
+	yesButton.MouseButton1Click:Connect(function()
+		frame.Visible = false
+		addLine("Dropping into the void...", Color3.fromRGB(255, 220, 120))
+		task.spawn(function()
+			local ok = activateGodmode()
+			if ok then
+				addLine("Godmode enabled — 0 HP, still mobile.", Color3.fromRGB(255, 200, 0))
+			else
+				addLine("Godmode failed — character not found.", Color3.fromRGB(255, 150, 150))
+			end
+		end)
+	end)
+
+	noButton.MouseButton1Click:Connect(function()
+		frame.Visible = false
+		addLine("Godmode not enabled.", Color3.fromRGB(255, 150, 150))
+	end)
+
+	godmodeConfirmFrame = frame
+	return frame
+end
+
+-------------------------------------------------
+-- ADMIN CHECK PANEL
+-------------------------------------------------
+
+local function createAdminCheckPanel()
+	if adminCheckFrame then return adminCheckFrame end
+
+	local frame = Instance.new("Frame")
+	frame.Name = "AdminCheckPanel"
+	frame.Size = UDim2.new(0, 240, 0, 330)
+	frame.Position = UDim2.new(0.5, -120, 0.2, 0)
+	frame.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
+	frame.BorderSizePixel = 0
+	frame.Visible = false
+	frame.Parent = screenGui
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 6)
+	corner.Parent = frame
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = Color3.fromRGB(255, 200, 0)
+	stroke.Thickness = 1.5
+	stroke.Parent = frame
+
+	local titleLabel = Instance.new("TextLabel")
+	titleLabel.Size = UDim2.new(1, -34, 0, 24)
+	titleLabel.Position = UDim2.new(0, 8, 0, 6)
+	titleLabel.BackgroundTransparency = 1
+	titleLabel.Text = "Admin Check"
+	titleLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
+	titleLabel.Font = Enum.Font.Code
+	titleLabel.TextSize = 16
+	titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+	titleLabel.Parent = frame
+
+	local closeButton = Instance.new("TextButton")
+	closeButton.Size = UDim2.new(0, 22, 0, 22)
+	closeButton.Position = UDim2.new(1, -28, 0, 6)
+	closeButton.BackgroundColor3 = Color3.fromRGB(60, 45, 0)
+	closeButton.TextColor3 = Color3.fromRGB(255, 200, 0)
+	closeButton.Font = Enum.Font.Code
+	closeButton.TextSize = 16
+	closeButton.Text = "x"
+	closeButton.Parent = frame
+
+	local closeCorner = Instance.new("UICorner")
+	closeCorner.CornerRadius = UDim.new(0, 4)
+	closeCorner.Parent = closeButton
+
+	closeButton.MouseButton1Click:Connect(function()
+		frame.Visible = false
+	end)
+
+	local panelDragging = false
+	local panelDragInput, panelDragStart, panelStartPos
+
+	titleLabel.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+			panelDragging = true
+			panelDragStart = input.Position
+			panelStartPos = frame.Position
+
+			input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then
+					panelDragging = false
+				end
+			end)
+		end
+	end)
+
+	titleLabel.InputChanged:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch then
+			panelDragInput = input
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if input == panelDragInput and panelDragging then
+			local delta = input.Position - panelDragStart
+			frame.Position = UDim2.new(
+				panelStartPos.X.Scale, panelStartPos.X.Offset + delta.X,
+				panelStartPos.Y.Scale, panelStartPos.Y.Offset + delta.Y
+			)
+		end
+	end)
+
+	local countLabel = Instance.new("TextLabel")
+	countLabel.Size = UDim2.new(1, -16, 0, 16)
+	countLabel.Position = UDim2.new(0, 8, 0, 34)
+	countLabel.BackgroundTransparency = 1
+	countLabel.Text = "Selected: 0"
+	countLabel.TextColor3 = Color3.fromRGB(200, 160, 0)
+	countLabel.Font = Enum.Font.Code
+	countLabel.TextSize = 12
+	countLabel.TextXAlignment = Enum.TextXAlignment.Left
+	countLabel.Parent = frame
+
+	local playerList = Instance.new("ScrollingFrame")
+	playerList.Size = UDim2.new(1, -16, 1, -130)
+	playerList.Position = UDim2.new(0, 8, 0, 54)
+	playerList.BackgroundColor3 = Color3.fromRGB(20, 15, 0)
+	playerList.BorderSizePixel = 0
+	playerList.ScrollBarThickness = 4
+	playerList.CanvasSize = UDim2.new(0, 0, 0, 0)
+	playerList.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	playerList.Parent = frame
+
+	local playerListCorner = Instance.new("UICorner")
+	playerListCorner.CornerRadius = UDim.new(0, 4)
+	playerListCorner.Parent = playerList
+
+	local playerListLayout = Instance.new("UIListLayout")
+	playerListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	playerListLayout.Padding = UDim.new(0, 2)
+	playerListLayout.Parent = playerList
+
+	local rowsByPlayer = {}
+
+	local function refreshCountLabel()
+		countLabel.Text = "Selected: " .. #selectedCheckPlayers
+	end
+
+	local function styleRow(row, targetPlayer)
+		local selected = isPlayerSelected(targetPlayer)
+		row.BackgroundColor3 = selected and Color3.fromRGB(60, 45, 0) or Color3.fromRGB(20, 15, 0)
+		row.TextColor3 = selected and Color3.fromRGB(255, 200, 0) or Color3.fromRGB(180, 140, 0)
+	end
+
+	local function addPlayerRow(targetPlayer)
+		if targetPlayer == player then return end
+
+		local row = Instance.new("TextButton")
+		row.Size = UDim2.new(1, 0, 0, 26)
+		row.BackgroundTransparency = 0
+		row.Font = Enum.Font.Code
+		row.TextSize = 14
+		row.Text = targetPlayer.Name
+		row.Parent = playerList
+
+		styleRow(row, targetPlayer)
+
+		row.MouseButton1Click:Connect(function()
+			local changed = toggleCheckSelection(targetPlayer)
+			if changed then
+				styleRow(row, targetPlayer)
+				refreshCountLabel()
+			end
+		end)
+
+		rowsByPlayer[targetPlayer] = row
+	end
+
+	local function removePlayerRow(targetPlayer)
+		local row = rowsByPlayer[targetPlayer]
+		if row then
+			row:Destroy()
+			rowsByPlayer[targetPlayer] = nil
+		end
+		local index = table.find(selectedCheckPlayers, targetPlayer)
+		if index then
+			table.remove(selectedCheckPlayers, index)
+			refreshCountLabel()
+		end
+	end
+
+	for _, existingPlayer in ipairs(Players:GetPlayers()) do
+		addPlayerRow(existingPlayer)
+	end
+	Players.PlayerAdded:Connect(addPlayerRow)
+	Players.PlayerRemoving:Connect(removePlayerRow)
+
+	-- "Check Status" runs admincheck's sequence, toggling into "Go Back"
+	-- once parked (same pattern as televoid).
+	local checkButton = Instance.new("TextButton")
+	checkButton.Size = UDim2.new(1, -16, 0, 28)
+	checkButton.Position = UDim2.new(0, 8, 1, -70)
+	checkButton.BackgroundColor3 = Color3.fromRGB(60, 45, 0)
+	checkButton.TextColor3 = Color3.fromRGB(255, 200, 0)
+	checkButton.Font = Enum.Font.Code
+	checkButton.TextSize = 15
+	checkButton.Text = "Check Status"
+	checkButton.Parent = frame
+
+	local checkButtonCorner = Instance.new("UICorner")
+	checkButtonCorner.CornerRadius = UDim.new(0, 4)
+	checkButtonCorner.Parent = checkButton
+
+	checkButton.MouseButton1Click:Connect(function()
+		if adminCheckParked() then
+			returnFromAdminCheck()
+			checkButton.Text = "Check Status"
+			checkButton.BackgroundColor3 = Color3.fromRGB(60, 45, 0)
+			return
+		end
+
+		if #selectedCheckPlayers == 0 then
+			local original = checkButton.Text
+			checkButton.Text = "select a player first"
+			task.delay(1.2, function() checkButton.Text = original end)
+			return
+		end
+		checkButton.Text = "checking..."
+		task.spawn(function()
+			runAdminCheckSequence()
+			checkButton.Text = "Go Back"
+			checkButton.BackgroundColor3 = Color3.fromRGB(40, 10, 10)
+		end)
+	end)
+
+	-- "Check2" runs the same selection through check2's sequence
+	-- instead — same button style/behavior as Check Status.
+	local check2Button = Instance.new("TextButton")
+	check2Button.Size = UDim2.new(1, -16, 0, 28)
+	check2Button.Position = UDim2.new(0, 8, 1, -36)
+	check2Button.BackgroundColor3 = Color3.fromRGB(60, 45, 0)
+	check2Button.TextColor3 = Color3.fromRGB(255, 200, 0)
+	check2Button.Font = Enum.Font.Code
+	check2Button.TextSize = 15
+	check2Button.Text = "Check2"
+	check2Button.Parent = frame
+
+	local check2ButtonCorner = Instance.new("UICorner")
+	check2ButtonCorner.CornerRadius = UDim.new(0, 4)
+	check2ButtonCorner.Parent = check2Button
+
+	check2Button.MouseButton1Click:Connect(function()
+		if #selectedCheckPlayers == 0 then
+			local original = check2Button.Text
+			check2Button.Text = "select a player first"
+			task.delay(1.2, function() check2Button.Text = original end)
+			return
+		end
+		check2Button.Text = "checking..."
+		task.spawn(function()
+			runCheck2Sequence()
+			check2Button.Text = "Check2"
+		end)
+	end)
+
+	adminCheckFrame = frame
+	return frame
+end
+
+-------------------------------------------------
+-- COMMANDS
+-------------------------------------------------
+
+local commands = {}
+
+commands["admincheck"] = function(args)
+	local panel = createAdminCheckPanel()
+	panel.Visible = true
+	return "Admin check panel opened — select players, then Check Status or Check2."
+end
+
+commands["check2"] = function(args)
+	if #selectedCheckPlayers == 0 then
+		return "No players selected — open the admin check panel first and select someone."
+	end
+	task.spawn(runCheck2Sequence)
+	return "Running check2 on " .. #selectedCheckPlayers .. " selected player(s)."
+end
+
+commands["godmode"] = function(args)
+	if isGodmode() then
+		return "Godmode is already active."
+	end
+	local popup = createGodmodeConfirmPopup()
+	popup.Visible = true
+	return "Confirm in the popup — Yes to enable, No to cancel."
+end
+
+commands["nogodmode"] = function(args)
+	if not isGodmode() then
+		return "Godmode is not active."
+	end
+	deactivateGodmode()
+	return "Godmode disabled."
+end
+
+commands["godmode2"] = function(args)
+	if isGodmode2() then
+		return "Godmode2 is already active."
+	end
+	godmode2On()
+	return "Godmode2 enabled — Health locked at max."
+end
+
+commands["nogodmode2"] = function(args)
+	if not isGodmode2() then
+		return "Godmode2 is not active."
+	end
+	godmode2Off()
+	return "Godmode2 disabled."
+end
+
+commands["attractor"] = function(args)
+	local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+local LocalPlayer = Players.LocalPlayer
+
+local DISTANCE = 3
+local ACTIVE = false
+
+local PASTEL_YELLOW = Color3.fromRGB(255, 241, 168)
+local YELLOW = Color3.fromRGB(255, 204, 60)
+local DARK_YELLOW = Color3.fromRGB(190, 145, 30)
+local TEXT_COLOR = Color3.fromRGB(80, 65, 20)
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "UnderAttractor"
+gui.ResetOnSpawn = false
+gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+local frame = Instance.new("Frame")
+frame.Name = "Main"
+frame.Size = UDim2.fromOffset(240, 155)
+frame.Position = UDim2.new(0, 25, 0.5, -75)
+frame.BackgroundColor3 = PASTEL_YELLOW
+frame.BorderColor3 = YELLOW
+frame.BorderSizePixel = 3
+frame.Active = true
+frame.Parent = gui
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 12)
+corner.Parent = frame
+
+local title = Instance.new("TextLabel")
+title.Name = "Title"
+title.Size = UDim2.new(1, -20, 0, 32)
+title.Position = UDim2.fromOffset(10, 4)
+title.BackgroundTransparency = 1
+title.Text = "♡ Under Attractor"
+title.TextColor3 = TEXT_COLOR
+title.TextSize = 18
+title.Font = Enum.Font.GothamBold
+title.Active = true
+title.Parent = frame
+
+local targetBox = Instance.new("TextBox")
+targetBox.Name = "Target"
+targetBox.Size = UDim2.new(1, -20, 0, 34)
+targetBox.Position = UDim2.fromOffset(10, 40)
+targetBox.BackgroundColor3 = Color3.fromRGB(255, 248, 205)
+targetBox.BorderColor3 = YELLOW
+targetBox.BorderSizePixel = 2
+targetBox.TextColor3 = TEXT_COLOR
+targetBox.PlaceholderColor3 = Color3.fromRGB(145, 125, 70)
+targetBox.PlaceholderText = "Player name..."
+targetBox.Text = ""
+targetBox.TextSize = 14
+targetBox.Font = Enum.Font.Gotham
+targetBox.ClearTextOnFocus = false
+targetBox.Parent = frame
+
+local boxCorner = Instance.new("UICorner")
+boxCorner.CornerRadius = UDim.new(0, 7)
+boxCorner.Parent = targetBox
+
+local toggle = Instance.new("TextButton")
+toggle.Name = "Toggle"
+toggle.Size = UDim2.new(1, -20, 0, 34)
+toggle.Position = UDim2.fromOffset(10, 80)
+toggle.BackgroundColor3 = YELLOW
+toggle.BorderSizePixel = 0
+toggle.TextColor3 = Color3.fromRGB(70, 50, 0)
+toggle.Text = "ATTRACT: OFF"
+toggle.TextSize = 14
+toggle.Font = Enum.Font.GothamBold
+toggle.Parent = frame
+
+local toggleCorner = Instance.new("UICorner")
+toggleCorner.CornerRadius = UDim.new(0, 7)
+toggleCorner.Parent = toggle
+
+local status = Instance.new("TextLabel")
+status.Name = "Status"
+status.Size = UDim2.new(1, -20, 0, 25)
+status.Position = UDim2.fromOffset(10, 121)
+status.BackgroundTransparency = 1
+status.Text = "Enter a player name"
+status.TextColor3 = DARK_YELLOW
+status.TextSize = 12
+status.Font = Enum.Font.Gotham
+status.Parent = frame
+
+local dragging = false
+local dragInput
+local dragStart
+local startPosition
+
+title.InputBegan:Connect(function(input)
+
+	if input.UserInputType == Enum.UserInputType.MouseButton1
+		or input.UserInputType == Enum.UserInputType.Touch then
+
+		dragging = true
+		dragStart = input.Position
+		startPosition = frame.Position
+
+		input.Changed:Connect(function()
+
+			if input.UserInputState == Enum.UserInputState.End then
+				dragging = false
+			end
+
+		end)
+	end
+end)
+
+title.InputChanged:Connect(function(input)
+
+	if input.UserInputType == Enum.UserInputType.MouseMovement
+		or input.UserInputType == Enum.UserInputType.Touch then
+
+		dragInput = input
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+
+	if input == dragInput and dragging then
+
+		local delta = input.Position - dragStart
+
+		frame.Position = UDim2.new(
+			startPosition.X.Scale,
+			startPosition.X.Offset + delta.X,
+
+			startPosition.Y.Scale,
+			startPosition.Y.Offset + delta.Y
+		)
+	end
+end)
+
+local function findPlayer(name)
+
+	if name == "" then
+		return nil
+	end
+
+	local exact = Players:FindFirstChild(name)
+
+	if exact then
+		return exact
+	end
+
+	local lowered = string.lower(name)
+
+	for _, player in ipairs(Players:GetPlayers()) do
+
+		if string.find(
+			string.lower(player.Name),
+			lowered,
+			1,
+			true
+		)
+		or string.find(
+			string.lower(player.DisplayName),
+			lowered,
+			1,
+			true
+		) then
+
+			return player
+		end
+	end
+
+	return nil
+end
+
+toggle.Activated:Connect(function()
+
+	ACTIVE = not ACTIVE
+
+	if ACTIVE then
+
+		toggle.Text = "ATTRACT: ON"
+		toggle.BackgroundColor3 =
+			Color3.fromRGB(255, 218, 90)
+
+		status.Text = "Looking for target..."
+		status.TextColor3 =
+			Color3.fromRGB(105, 135, 35)
+
+	else
+
+		toggle.Text = "ATTRACT: OFF"
+		toggle.BackgroundColor3 = YELLOW
+
+		status.Text = "Attractor disabled"
+		status.TextColor3 = DARK_YELLOW
+
+		local character = LocalPlayer.Character
+
+		if character then
+
+			local humanoid =
+				character:FindFirstChildOfClass("Humanoid")
+
+			if humanoid then
+				humanoid.AutoRotate = true
+			end
+		end
+	end
+end)
+
+RunService.Heartbeat:Connect(function()
+
+	if not ACTIVE then
+		return
+	end
+
+	local target = findPlayer(targetBox.Text)
+
+	if not target then
+
+		status.Text = "Target not found :("
+		status.TextColor3 =
+			Color3.fromRGB(190, 80, 50)
+
+		return
+	end
+
+	local myCharacter = LocalPlayer.Character
+	local targetCharacter = target.Character
+
+	if not myCharacter or not targetCharacter then
+		return
+	end
+
+	local myRoot =
+		myCharacter:FindFirstChild("HumanoidRootPart")
+
+	local targetRoot =
+		targetCharacter:FindFirstChild("HumanoidRootPart")
+
+	if not myRoot or not targetRoot then
+		return
+	end
+
+	local humanoid =
+		myCharacter:FindFirstChildOfClass("Humanoid")
+
+	if humanoid then
+		humanoid.AutoRotate = false
+	end
+
+	local targetBoxCFrame, targetBoxSize =
+		targetCharacter:GetBoundingBox()
+
+	local myBoxCFrame, myBoxSize =
+		myCharacter:GetBoundingBox()
+
+	local targetBottom =
+		targetBoxCFrame.Position.Y
+		- (targetBoxSize.Y / 2)
+
+	local myHalfHeight =
+		myBoxSize.Y / 2
+
+	local desiredY =
+		targetBottom
+		- DISTANCE
+		- myHalfHeight
+
+	local position = Vector3.new(
+		targetRoot.Position.X,
+		desiredY,
+		targetRoot.Position.Z
+	)
+
+	local lookDirection =
+		Vector3.new(0, 1, 0)
+
+	local upDirection =
+		targetRoot.CFrame.RightVector
+
+	local finalCFrame =
+		CFrame.lookAt(
+			position,
+			position + lookDirection,
+			upDirection
+		)
+
+	myRoot.AssemblyLinearVelocity =
+		Vector3.zero
+
+	myRoot.AssemblyAngularVelocity =
+		Vector3.zero
+
+	myCharacter:PivotTo(finalCFrame)
+
+	status.Text =
+		"Under: "
+		.. target.Name
+		.. " • 3 STUD GAP"
+
+	status.TextColor3 =
+		Color3.fromRGB(105, 135, 35)
+end)
+
+end
+
+commands["help"] = function(args)
+	local names = {}
+	for name in pairs(commands) do
+		table.insert(names, name)
+	end
+	table.sort(names)
+
+	local lines = { "Available commands:" }
+	for _, name in ipairs(names) do
+		table.insert(lines, "  - " .. name)
+	end
+	return lines
+end
+
+commands["clear"] = function(args)
+	clearConsole()
+	return "Console cleared."
+end
+
+-------------------------------------------------
+-- INPUT HANDLING
+-------------------------------------------------
+
+local function parseCommand(rawText)
+	local parts = rawText:split(" ")
+	local cmdName = (parts[1] or ""):lower()
+	table.remove(parts, 1)
+	return cmdName, parts
+end
+
+local function runCommand(cmdName, args)
+	local fn = commands[cmdName]
+	if fn then
+		local ok, result = pcall(fn, args)
+		if ok then
+			return result or "Done."
+		else
+			return "Error: " .. tostring(result)
+		end
+	else
+		return "Unknown command: '" .. cmdName .. "'. Type 'help' for a list."
+	end
+end
+
+local processing = false
+
+inputBox.FocusLost:Connect(function(enterPressed)
+	if not enterPressed then return end
+	local text = inputBox.Text
+	if processing or text == "" then
+		inputBox.Text = ""
+		return
+	end
+
+	processing = true
+	inputBox.Text = ""
+	inputBox.TextEditable = false
+
+	local cmdName, args = parseCommand(text)
+	addLine("$ " .. text, Color3.fromRGB(255, 220, 120))
+
+	local result = runCommand(cmdName, args)
+	if type(result) == "table" then
+		for _, resultText in ipairs(result) do
+			addLine(resultText, Color3.fromRGB(255, 200, 0))
+		end
+	else
+		addLine(result, Color3.fromRGB(255, 200, 0))
+	end
+
+	inputBox.TextEditable = true
+	processing = false
+	inputBox:CaptureFocus()
+end)
+
+addLine("Terminalpanel Premium ready. Type 'help' for a list of commands.", Color3.fromRGB(255, 220, 120))
