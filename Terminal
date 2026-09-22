@@ -676,113 +676,6 @@ local godmode2On, godmode2Off, isGodmode2 = createToggle(RunService.Heartbeat, f
 	end
 end)
 
--------------------------------------------------
--- GODMODE VISUAL INDICATOR
--- The bar in the screenshot is your own game's custom on-screen HUD
--- health bar (a 2D GuiObject in your PlayerGui) — not Roblox's 3D
--- above-head billboard, and not part of CoreGui, so there's no fixed
--- API to grab it by. This searches your PlayerGui for anything whose
--- name looks like a health bar, hides it while godmode is active, and
--- places a replacement in the exact same parent with the exact same
--- Size/Position/AnchorPoint — since it's copied directly rather than
--- estimated, the scale/position match perfectly regardless of screen
--- size, because the same UDim2 values resolve identically inside the
--- same parent container.
---
--- If your health bar's Instance name doesn't contain "health" or
--- "hp", this search won't find it — tell me its actual name (check
--- via Studio's Explorer under PlayerGui) and I'll target it directly
--- instead of relying on the guess.
--------------------------------------------------
-
-local function findGameHealthBar()
-	local playerGui = player:FindFirstChild("PlayerGui")
-	if not playerGui then return nil end
-
-	local function scan(instance, depth)
-		if depth > 8 then return nil end
-		for _, child in ipairs(instance:GetChildren()) do
-			if child:IsA("GuiObject") then
-				local nameLower = child.Name:lower()
-				if nameLower:find("health") or nameLower:find("hpbar") or nameLower == "hp" then
-					return child
-				end
-			end
-			local found = scan(child, depth + 1)
-			if found then return found end
-		end
-		return nil
-	end
-
-	return scan(playerGui, 0)
-end
-
-local godmodeHealthBarOriginal = nil
-local godmodeReplacementBar = nil
-
-local function destroyGodmodeReplacementBar()
-	if godmodeReplacementBar then
-		godmodeReplacementBar:Destroy()
-	end
-	godmodeReplacementBar = nil
-	if godmodeHealthBarOriginal then
-		godmodeHealthBarOriginal.Visible = true
-	end
-	godmodeHealthBarOriginal = nil
-end
-
-local function createGodmodeReplacementBar(original)
-	godmodeHealthBarOriginal = original
-	original.Visible = false
-
-	local bar = Instance.new("Frame")
-	bar.Name = "GodmodeHealthBarReplacement"
-	bar.Size = original.Size
-	bar.Position = original.Position
-	bar.AnchorPoint = original.AnchorPoint
-	bar.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
-	bar.BorderSizePixel = 0
-	bar.ZIndex = original.ZIndex + 1
-	bar.Parent = original.Parent
-
-	-- Match the original's rounding if it has a UICorner, so the
-	-- pill shape carries over instead of showing square corners.
-	local originalCorner = original:FindFirstChildOfClass("UICorner")
-	local corner = Instance.new("UICorner")
-	corner.CornerRadius = originalCorner and originalCorner.CornerRadius or UDim.new(1, 0)
-	corner.Parent = bar
-
-	local originalStroke = original:FindFirstChildOfClass("UIStroke")
-	if originalStroke then
-		local stroke = Instance.new("UIStroke")
-		stroke.Color = originalStroke.Color
-		stroke.Thickness = originalStroke.Thickness
-		stroke.Parent = bar
-	end
-
-	godmodeReplacementBar = bar
-end
-
-RunService.Heartbeat:Connect(function()
-	local active = isGodmode() or isGodmode2()
-
-	if active then
-		if not godmodeReplacementBar or not godmodeReplacementBar.Parent then
-			local found = findGameHealthBar()
-			if found then
-				createGodmodeReplacementBar(found)
-			end
-		end
-		if godmodeReplacementBar then
-			local hue = (os.clock() % 2) / 2 -- full rainbow cycle every 2 seconds
-			godmodeReplacementBar.BackgroundColor3 = Color3.fromHSV(hue, 1, 1)
-		end
-	else
-		if godmodeReplacementBar then
-			destroyGodmodeReplacementBar()
-		end
-	end
-end)
 
 -------------------------------------------------
 -- GODMODE CONFIRM POPUP
@@ -1228,7 +1121,7 @@ corner.Parent = frame
 
 local title = Instance.new("TextLabel")
 title.Name = "Title"
-title.Size = UDim2.new(1, -20, 0, 32)
+title.Size = UDim2.new(1, -55, 0, 32)
 title.Position = UDim2.fromOffset(10, 4)
 title.BackgroundTransparency = 1
 title.Text = "♡ Under Attractor"
@@ -1237,6 +1130,22 @@ title.TextSize = 18
 title.Font = Enum.Font.GothamBold
 title.Active = true
 title.Parent = frame
+
+local closeButton = Instance.new("TextButton")
+closeButton.Name = "Close"
+closeButton.Size = UDim2.fromOffset(28, 28)
+closeButton.Position = UDim2.new(1, -34, 0, 6)
+closeButton.BackgroundColor3 = YELLOW
+closeButton.BorderSizePixel = 0
+closeButton.Text = "✕"
+closeButton.TextColor3 = TEXT_COLOR
+closeButton.TextSize = 16
+closeButton.Font = Enum.Font.GothamBold
+closeButton.Parent = frame
+
+local closeCorner = Instance.new("UICorner")
+closeCorner.CornerRadius = UDim.new(0, 7)
+closeCorner.Parent = closeButton
 
 local targetBox = Instance.new("TextBox")
 targetBox.Name = "Target"
@@ -1404,6 +1313,25 @@ toggle.Activated:Connect(function()
 			end
 		end
 	end
+end)
+
+closeButton.Activated:Connect(function()
+
+	ACTIVE = false
+
+	local character = LocalPlayer.Character
+
+	if character then
+
+		local humanoid =
+			character:FindFirstChildOfClass("Humanoid")
+
+		if humanoid then
+			humanoid.AutoRotate = true
+		end
+	end
+
+	gui:Destroy()
 end)
 
 RunService.Heartbeat:Connect(function()
