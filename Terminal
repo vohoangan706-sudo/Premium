@@ -1033,6 +1033,240 @@ local function createAdminCheckPanel()
 end
 
 -------------------------------------------------
+-- PLACE TELEPORT
+-- A small panel listing fixed places. Picking one starts looping you
+-- there (same re-snap-every-frame mechanic as televoid/admincheck,
+-- reusing the same createVoidLoop helper — it already takes any
+-- position, not just the void's), and switching to a different place
+-- while already looping just retargets it, no need to stop first.
+-- "Stop" ends the loop and returns you to wherever you were before
+-- you started, same convention as every other loop feature here.
+-------------------------------------------------
+
+local PLACE_PLATFORM_SIZE = Vector3.new(4000, 0.5, 4000)
+local placePlatforms = {} -- keyed by place name, so each is only built once
+
+-- Generic version of createVoidPlatform for places other than the
+-- void itself (Deepvoid, The Sky) — same look, any position.
+local function createPlacePlatform(place)
+	if placePlatforms[place.name] then return end
+
+	local platform = Instance.new("Part")
+	platform.Name = "PlaceTeleportPlatform_" .. place.name
+	platform.Size = PLACE_PLATFORM_SIZE
+	platform.Position = place.position - Vector3.new(0, PLACE_PLATFORM_SIZE.Y / 2, 0)
+	platform.Anchored = true
+	platform.CanCollide = true
+	platform.Material = Enum.Material.Glass
+	platform.Color = Color3.fromRGB(210, 235, 255)
+	platform.Transparency = 0.55
+	platform.Reflectance = 0.15
+	platform.Parent = workspace
+
+	placePlatforms[place.name] = platform
+end
+
+local PLACES = {
+	{ name = "Void", position = Vector3.new(0, -500, 0), platformFn = createVoidPlatform },
+	{ name = "Deepvoid", position = Vector3.new(0, -10000, 0), platformFn = createPlacePlatform },
+	{ name = "Null Zone", position = Vector3.new(100000000, 100000000, 100000000), platformFn = nil },
+	{ name = "The Sky", position = Vector3.new(0, 500, 0), platformFn = createPlacePlatform },
+}
+
+local currentPlaceTarget = nil
+local placeTeleportReturnCFrame = nil
+
+local placeLoopStart, placeLoopStop, isPlaceLooping = createVoidLoop(function()
+	return currentPlaceTarget
+end)
+
+-- Picking a place while already looping just retargets the existing
+-- loop (currentPlaceTarget is read fresh every frame) — only the
+-- very first pick captures your return spot.
+local function selectPlace(place)
+	if place.platformFn then
+		place.platformFn(place)
+	end
+
+	if not isPlaceLooping() then
+		local char = player.Character
+		local hrp = char and char:FindFirstChild("HumanoidRootPart")
+		if hrp then
+			placeTeleportReturnCFrame = hrp.CFrame
+		end
+	end
+
+	currentPlaceTarget = place.position
+	placeLoopStart()
+end
+
+local function stopPlaceTeleport()
+	placeLoopStop()
+
+	local char = player.Character
+	local hrp = char and char:FindFirstChild("HumanoidRootPart")
+	if hrp and placeTeleportReturnCFrame then
+		hrp.CFrame = placeTeleportReturnCFrame
+	end
+	placeTeleportReturnCFrame = nil
+	currentPlaceTarget = nil
+end
+
+local placeTeleportFrame = nil
+
+local function createPlaceTeleportPanel()
+	if placeTeleportFrame then return placeTeleportFrame end
+
+	local frame = Instance.new("Frame")
+	frame.Name = "PlaceTeleportPanel"
+	frame.Size = UDim2.new(0, 220, 0, 260)
+	frame.Position = UDim2.new(0.5, -110, 0.2, 0)
+	frame.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
+	frame.BorderSizePixel = 0
+	frame.Visible = false
+	frame.Parent = screenGui
+
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 6)
+	corner.Parent = frame
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = Color3.fromRGB(255, 200, 0)
+	stroke.Thickness = 1.5
+	stroke.Parent = frame
+
+	local titleLabel = Instance.new("TextLabel")
+	titleLabel.Size = UDim2.new(1, -34, 0, 24)
+	titleLabel.Position = UDim2.new(0, 8, 0, 6)
+	titleLabel.BackgroundTransparency = 1
+	titleLabel.Text = "Place Teleport"
+	titleLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
+	titleLabel.Font = Enum.Font.Code
+	titleLabel.TextSize = 16
+	titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+	titleLabel.Parent = frame
+
+	local closeButton = Instance.new("TextButton")
+	closeButton.Size = UDim2.new(0, 22, 0, 22)
+	closeButton.Position = UDim2.new(1, -28, 0, 6)
+	closeButton.BackgroundColor3 = Color3.fromRGB(60, 45, 0)
+	closeButton.TextColor3 = Color3.fromRGB(255, 200, 0)
+	closeButton.Font = Enum.Font.Code
+	closeButton.TextSize = 16
+	closeButton.Text = "x"
+	closeButton.Parent = frame
+
+	local closeCorner = Instance.new("UICorner")
+	closeCorner.CornerRadius = UDim.new(0, 4)
+	closeCorner.Parent = closeButton
+
+	closeButton.MouseButton1Click:Connect(function()
+		frame.Visible = false
+	end)
+
+	local panelDragging = false
+	local panelDragInput, panelDragStart, panelStartPos
+
+	titleLabel.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1
+			or input.UserInputType == Enum.UserInputType.Touch then
+			panelDragging = true
+			panelDragStart = input.Position
+			panelStartPos = frame.Position
+
+			input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then
+					panelDragging = false
+				end
+			end)
+		end
+	end)
+
+	titleLabel.InputChanged:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseMovement
+			or input.UserInputType == Enum.UserInputType.Touch then
+			panelDragInput = input
+		end
+	end)
+
+	UserInputService.InputChanged:Connect(function(input)
+		if input == panelDragInput and panelDragging then
+			local delta = input.Position - panelDragStart
+			frame.Position = UDim2.new(
+				panelStartPos.X.Scale, panelStartPos.X.Offset + delta.X,
+				panelStartPos.Y.Scale, panelStartPos.Y.Offset + delta.Y
+			)
+		end
+	end)
+
+	local placeList = Instance.new("Frame")
+	placeList.Size = UDim2.new(1, -16, 1, -76)
+	placeList.Position = UDim2.new(0, 8, 0, 34)
+	placeList.BackgroundTransparency = 1
+	placeList.Parent = frame
+
+	local placeListLayout = Instance.new("UIListLayout")
+	placeListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+	placeListLayout.Padding = UDim.new(0, 6)
+	placeListLayout.Parent = placeList
+
+	local placeButtons = {}
+
+	local function refreshButtonStyles(selectedPlace)
+		for place, button in pairs(placeButtons) do
+			local isSelected = place == selectedPlace
+			button.BackgroundColor3 = isSelected and Color3.fromRGB(60, 45, 0) or Color3.fromRGB(20, 15, 0)
+			button.TextColor3 = isSelected and Color3.fromRGB(255, 200, 0) or Color3.fromRGB(180, 140, 0)
+		end
+	end
+
+	for i, place in ipairs(PLACES) do
+		local button = Instance.new("TextButton")
+		button.Size = UDim2.new(1, 0, 0, 30)
+		button.BackgroundColor3 = Color3.fromRGB(20, 15, 0)
+		button.TextColor3 = Color3.fromRGB(180, 140, 0)
+		button.Font = Enum.Font.Code
+		button.TextSize = 14
+		button.Text = place.name
+		button.LayoutOrder = i
+		button.Parent = placeList
+
+		local buttonCorner = Instance.new("UICorner")
+		buttonCorner.CornerRadius = UDim.new(0, 4)
+		buttonCorner.Parent = button
+
+		button.MouseButton1Click:Connect(function()
+			selectPlace(place)
+			refreshButtonStyles(place)
+		end)
+
+		placeButtons[place] = button
+	end
+
+	local stopButton = Instance.new("TextButton")
+	stopButton.Size = UDim2.new(1, -16, 0, 28)
+	stopButton.Position = UDim2.new(0, 8, 1, -36)
+	stopButton.BackgroundColor3 = Color3.fromRGB(40, 10, 10)
+	stopButton.TextColor3 = Color3.fromRGB(255, 150, 150)
+	stopButton.Font = Enum.Font.Code
+	stopButton.TextSize = 15
+	stopButton.Text = "Stop"
+	stopButton.Parent = frame
+
+	local stopButtonCorner = Instance.new("UICorner")
+	stopButtonCorner.CornerRadius = UDim.new(0, 4)
+	stopButtonCorner.Parent = stopButton
+
+	stopButton.MouseButton1Click:Connect(function()
+		stopPlaceTeleport()
+		refreshButtonStyles(nil)
+	end)
+
+	placeTeleportFrame = frame
+	return frame
+end
+
+-------------------------------------------------
 -- COMMANDS
 -------------------------------------------------
 
@@ -1086,11 +1320,12 @@ commands["nogodmode2"] = function(args)
 end
 
 commands["attractor"] = function(args)
-	local Players = game:GetService("Players")
+local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
 local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
 
 local DISTANCE = 3
 local ACTIVE = false
@@ -1243,6 +1478,23 @@ UserInputService.InputChanged:Connect(function(input)
 	end
 end)
 
+local function restoreCamera()
+
+	local character = LocalPlayer.Character
+
+	if not character then
+		return
+	end
+
+	local humanoid =
+		character:FindFirstChildOfClass("Humanoid")
+
+	if humanoid then
+		Camera.CameraType = Enum.CameraType.Custom
+		Camera.CameraSubject = humanoid
+	end
+end
+
 local function findPlayer(name)
 
 	if name == "" then
@@ -1312,6 +1564,8 @@ toggle.Activated:Connect(function()
 				humanoid.AutoRotate = true
 			end
 		end
+
+		restoreCamera()
 	end
 end)
 
@@ -1331,6 +1585,8 @@ closeButton.Activated:Connect(function()
 		end
 	end
 
+	restoreCamera()
+
 	gui:Destroy()
 end)
 
@@ -1348,6 +1604,8 @@ RunService.Heartbeat:Connect(function()
 		status.TextColor3 =
 			Color3.fromRGB(190, 80, 50)
 
+		restoreCamera()
+
 		return
 	end
 
@@ -1364,10 +1622,21 @@ RunService.Heartbeat:Connect(function()
 	local targetRoot =
 		targetCharacter:FindFirstChild("HumanoidRootPart")
 
+	local targetHumanoid =
+		targetCharacter:FindFirstChildOfClass("Humanoid")
+
 	if not myRoot or not targetRoot then
 		return
 	end
 
+	-- Spectate selected player
+	if targetHumanoid then
+
+		Camera.CameraType = Enum.CameraType.Custom
+		Camera.CameraSubject = targetHumanoid
+	end
+
+	-- Disable our automatic rotation
 	local humanoid =
 		myCharacter:FindFirstChildOfClass("Humanoid")
 
@@ -1375,30 +1644,36 @@ RunService.Heartbeat:Connect(function()
 		humanoid.AutoRotate = false
 	end
 
+	-- Get actual body bounds
 	local targetBoxCFrame, targetBoxSize =
 		targetCharacter:GetBoundingBox()
 
 	local myBoxCFrame, myBoxSize =
 		myCharacter:GetBoundingBox()
 
+	-- Bottom of target
 	local targetBottom =
 		targetBoxCFrame.Position.Y
 		- (targetBoxSize.Y / 2)
 
+	-- Half height of our body
 	local myHalfHeight =
 		myBoxSize.Y / 2
 
+	-- Exactly 3 studs between bodies
 	local desiredY =
 		targetBottom
 		- DISTANCE
 		- myHalfHeight
 
+	-- Same X/Z as target
 	local position = Vector3.new(
 		targetRoot.Position.X,
 		desiredY,
 		targetRoot.Position.Z
 	)
 
+	-- Horizontal orientation
 	local lookDirection =
 		Vector3.new(0, 1, 0)
 
@@ -1412,23 +1687,31 @@ RunService.Heartbeat:Connect(function()
 			upDirection
 		)
 
+	-- Remove velocity
 	myRoot.AssemblyLinearVelocity =
 		Vector3.zero
 
 	myRoot.AssemblyAngularVelocity =
 		Vector3.zero
 
+	-- Move entire character
 	myCharacter:PivotTo(finalCFrame)
 
 	status.Text =
 		"Under: "
 		.. target.Name
-		.. " • 3 STUD GAP"
+		.. " • 3 STUD GAP • SPECTATING"
 
 	status.TextColor3 =
 		Color3.fromRGB(105, 135, 35)
 end)
 
+end
+
+commands["placeteleport"] = function(args)
+	local panel = createPlaceTeleportPanel()
+	panel.Visible = true
+	return "Place teleport panel opened — pick a place, or Stop to return."
 end
 
 commands["help"] = function(args)
