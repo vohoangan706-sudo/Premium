@@ -523,6 +523,61 @@ local function runCheck2Sequence()
 end
 
 -------------------------------------------------
+-- TRUECHECK
+-- More accurate status check — the real detection logic already
+-- lives in your game's own key-2 hook, same idea as key-3 for
+-- admincheck. Sequence: key 2 -> wait -> orbit-sweep every selected
+-- player (bounded to 0.8s total) -> loop-park on the void platform
+-- (same createVoidLoop mechanic as televoid/admincheck, not a raw
+-- anchor) -> wait -> stop the loop and return to wherever you were
+-- standing before the sequence started.
+-------------------------------------------------
+
+local function runTrueKeyCheck()
+	local ok, err = pcall(function()
+		VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Two, false, game)
+		task.wait(0.03)
+		VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Two, false, game)
+	end)
+	if not ok then
+		warn("2 key simulation failed:", err)
+	end
+end
+
+local trueCheckReturnCFrame = nil
+
+local function runTrueCheckSequence()
+	local startChar = player.Character
+	local startHrp = startChar and startChar:FindFirstChild("HumanoidRootPart")
+	if startHrp then
+		trueCheckReturnCFrame = startHrp.CFrame
+	end
+
+	runTrueKeyCheck()
+	task.wait(0.3)
+
+	local targetHrps = getSelectedTargetHrps()
+	if #targetHrps > 0 then
+		local perStep = 0.8 / #targetHrps
+		for _, targetHrp in ipairs(targetHrps) do
+			orbitTargetBriefly(targetHrp, perStep)
+		end
+	end
+
+	createVoidPlatform()
+	adminVoidLoopStart()
+	task.wait(0.5)
+	adminVoidLoopStop()
+
+	local char = player.Character
+	local hrp = char and char:FindFirstChild("HumanoidRootPart")
+	if hrp and trueCheckReturnCFrame then
+		hrp.CFrame = trueCheckReturnCFrame
+	end
+	trueCheckReturnCFrame = nil
+end
+
+-------------------------------------------------
 -- GODMODE (Option B: stay at 0 HP, but stay mobile)
 -- Drops your Health to 0 via the void, but disables Roblox's Dead
 -- state first so you never ragdoll, never get locked out of
@@ -1070,7 +1125,7 @@ local PLACES = {
 	{ name = "Void", position = Vector3.new(0, -500, 0), platformFn = createVoidPlatform },
 	{ name = "Deepvoid", position = Vector3.new(0, -10000, 0), platformFn = createPlacePlatform },
 	{ name = "Null Zone", position = Vector3.new(100000000, 100000000, 100000000), platformFn = nil },
-	{ name = "The Sky", position = Vector3.new(0, 500, 0), platformFn = createPlacePlatform },
+	{ name = "The Sky", position = Vector3.new(0, 2000, 0), platformFn = createPlacePlatform },
 }
 
 local currentPlaceTarget = nil
@@ -1286,6 +1341,14 @@ commands["check2"] = function(args)
 	return "Running check2 on " .. #selectedCheckPlayers .. " selected player(s)."
 end
 
+commands["truecheck"] = function(args)
+	if #selectedCheckPlayers == 0 then
+		return "No players selected — open the admin check panel first and select someone."
+	end
+	task.spawn(runTrueCheckSequence)
+	return "Running truecheck on " .. #selectedCheckPlayers .. " selected player(s)."
+end
+
 commands["godmode"] = function(args)
 	if isGodmode() then
 		return "Godmode is already active."
@@ -1320,7 +1383,7 @@ commands["nogodmode2"] = function(args)
 end
 
 commands["attractor"] = function(args)
-local Players = game:GetService("Players")
+	local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
