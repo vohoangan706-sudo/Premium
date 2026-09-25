@@ -21,6 +21,7 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
+local SoundService = game:GetService("SoundService")
 
 local player = Players.LocalPlayer
 
@@ -640,6 +641,22 @@ end
 -- currently loaded. Safe to call again on a fresh character (e.g.
 -- after a forced respawn) — it doesn't depend on any state from a
 -- previous character.
+local GODMODE_MUSIC_ID = "rbxassetid://92563891769161"
+local godmodeSound = nil
+
+local function getGodmodeSound()
+	if not godmodeSound then
+		local sound = Instance.new("Sound")
+		sound.Name = "GodmodeMusic"
+		sound.SoundId = GODMODE_MUSIC_ID
+		sound.Looped = true
+		sound.Volume = 0.5
+		sound.Parent = SoundService
+		godmodeSound = sound
+	end
+	return godmodeSound
+end
+
 local function activateGodmode()
 	local char = player.Character
 	local hum = char and char:FindFirstChildOfClass("Humanoid")
@@ -669,6 +686,8 @@ local function activateGodmode()
 	end
 	applyDefaultR6Animations(currentChar)
 
+	getGodmodeSound():Play()
+
 	godmodeActive = true
 	return true
 end
@@ -679,6 +698,9 @@ local function deactivateGodmode()
 	if hum then
 		hum:SetStateEnabled(Enum.HumanoidStateType.Dead, true)
 		hum.Health = hum.MaxHealth
+	end
+	if godmodeSound then
+		godmodeSound:Stop()
 	end
 	godmodeActive = false
 end
@@ -850,7 +872,7 @@ local function createAdminCheckPanel()
 
 	local frame = Instance.new("Frame")
 	frame.Name = "AdminCheckPanel"
-	frame.Size = UDim2.new(0, 240, 0, 330)
+	frame.Size = UDim2.new(0, 240, 0, 364)
 	frame.Position = UDim2.new(0.5, -120, 0.2, 0)
 	frame.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
 	frame.BorderSizePixel = 0
@@ -942,7 +964,7 @@ local function createAdminCheckPanel()
 	countLabel.Parent = frame
 
 	local playerList = Instance.new("ScrollingFrame")
-	playerList.Size = UDim2.new(1, -16, 1, -130)
+	playerList.Size = UDim2.new(1, -16, 1, -164)
 	playerList.Position = UDim2.new(0, 8, 0, 54)
 	playerList.BackgroundColor3 = Color3.fromRGB(20, 15, 0)
 	playerList.BorderSizePixel = 0
@@ -1019,7 +1041,7 @@ local function createAdminCheckPanel()
 	-- once parked (same pattern as televoid).
 	local checkButton = Instance.new("TextButton")
 	checkButton.Size = UDim2.new(1, -16, 0, 28)
-	checkButton.Position = UDim2.new(0, 8, 1, -70)
+	checkButton.Position = UDim2.new(0, 8, 1, -104)
 	checkButton.BackgroundColor3 = Color3.fromRGB(60, 45, 0)
 	checkButton.TextColor3 = Color3.fromRGB(255, 200, 0)
 	checkButton.Font = Enum.Font.Code
@@ -1057,7 +1079,7 @@ local function createAdminCheckPanel()
 	-- instead — same button style/behavior as Check Status.
 	local check2Button = Instance.new("TextButton")
 	check2Button.Size = UDim2.new(1, -16, 0, 28)
-	check2Button.Position = UDim2.new(0, 8, 1, -36)
+	check2Button.Position = UDim2.new(0, 8, 1, -70)
 	check2Button.BackgroundColor3 = Color3.fromRGB(60, 45, 0)
 	check2Button.TextColor3 = Color3.fromRGB(255, 200, 0)
 	check2Button.Font = Enum.Font.Code
@@ -1080,6 +1102,36 @@ local function createAdminCheckPanel()
 		task.spawn(function()
 			runCheck2Sequence()
 			check2Button.Text = "Check2"
+		end)
+	end)
+
+	-- "TrueCheck" runs the same selection through truecheck's more
+	-- accurate sequence — same button style/behavior as the other two.
+	local trueCheckButton = Instance.new("TextButton")
+	trueCheckButton.Size = UDim2.new(1, -16, 0, 28)
+	trueCheckButton.Position = UDim2.new(0, 8, 1, -36)
+	trueCheckButton.BackgroundColor3 = Color3.fromRGB(60, 45, 0)
+	trueCheckButton.TextColor3 = Color3.fromRGB(255, 200, 0)
+	trueCheckButton.Font = Enum.Font.Code
+	trueCheckButton.TextSize = 15
+	trueCheckButton.Text = "TrueCheck"
+	trueCheckButton.Parent = frame
+
+	local trueCheckButtonCorner = Instance.new("UICorner")
+	trueCheckButtonCorner.CornerRadius = UDim.new(0, 4)
+	trueCheckButtonCorner.Parent = trueCheckButton
+
+	trueCheckButton.MouseButton1Click:Connect(function()
+		if #selectedCheckPlayers == 0 then
+			local original = trueCheckButton.Text
+			trueCheckButton.Text = "select a player first"
+			task.delay(1.2, function() trueCheckButton.Text = original end)
+			return
+		end
+		trueCheckButton.Text = "checking..."
+		task.spawn(function()
+			runTrueCheckSequence()
+			trueCheckButton.Text = "TrueCheck"
 		end)
 	end)
 
@@ -1383,7 +1435,7 @@ commands["nogodmode2"] = function(args)
 end
 
 commands["attractor"] = function(args)
-	local Players = game:GetService("Players")
+local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
@@ -1391,6 +1443,7 @@ local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
 
 local DISTANCE = 3
+local SPECTATE_DISTANCE = 5
 local ACTIVE = false
 
 local PASTEL_YELLOW = Color3.fromRGB(255, 241, 168)
@@ -1498,7 +1551,6 @@ local dragStart
 local startPosition
 
 title.InputBegan:Connect(function(input)
-
 	if input.UserInputType == Enum.UserInputType.MouseButton1
 		or input.UserInputType == Enum.UserInputType.Touch then
 
@@ -1507,17 +1559,14 @@ title.InputBegan:Connect(function(input)
 		startPosition = frame.Position
 
 		input.Changed:Connect(function()
-
 			if input.UserInputState == Enum.UserInputState.End then
 				dragging = false
 			end
-
 		end)
 	end
 end)
 
 title.InputChanged:Connect(function(input)
-
 	if input.UserInputType == Enum.UserInputType.MouseMovement
 		or input.UserInputType == Enum.UserInputType.Touch then
 
@@ -1526,7 +1575,6 @@ title.InputChanged:Connect(function(input)
 end)
 
 UserInputService.InputChanged:Connect(function(input)
-
 	if input == dragInput and dragging then
 
 		local delta = input.Position - dragStart
@@ -1534,29 +1582,11 @@ UserInputService.InputChanged:Connect(function(input)
 		frame.Position = UDim2.new(
 			startPosition.X.Scale,
 			startPosition.X.Offset + delta.X,
-
 			startPosition.Y.Scale,
 			startPosition.Y.Offset + delta.Y
 		)
 	end
 end)
-
-local function restoreCamera()
-
-	local character = LocalPlayer.Character
-
-	if not character then
-		return
-	end
-
-	local humanoid =
-		character:FindFirstChildOfClass("Humanoid")
-
-	if humanoid then
-		Camera.CameraType = Enum.CameraType.Custom
-		Camera.CameraSubject = humanoid
-	end
-end
 
 local function findPlayer(name)
 
@@ -1592,6 +1622,37 @@ local function findPlayer(name)
 	end
 
 	return nil
+end
+
+local function restoreCamera()
+
+	Camera.CameraType = Enum.CameraType.Custom
+
+	local character = LocalPlayer.Character
+
+	if character then
+
+		local humanoid =
+			character:FindFirstChildOfClass("Humanoid")
+
+		if humanoid then
+			Camera.CameraSubject = humanoid
+		end
+	end
+end
+
+local function spectateTarget(targetRoot)
+
+	-- Put camera 5 studs behind the selected player
+	local cameraPosition =
+		targetRoot.Position
+		- targetRoot.CFrame.LookVector * SPECTATE_DISTANCE
+
+	-- Look directly at the selected player
+	Camera.CFrame = CFrame.lookAt(
+		cameraPosition,
+		targetRoot.Position
+	)
 end
 
 toggle.Activated:Connect(function()
@@ -1653,7 +1714,7 @@ closeButton.Activated:Connect(function()
 	gui:Destroy()
 end)
 
-RunService.Heartbeat:Connect(function()
+RunService:Heartbeat:Connect(function()
 
 	if not ACTIVE then
 		return
@@ -1666,8 +1727,6 @@ RunService.Heartbeat:Connect(function()
 		status.Text = "Target not found :("
 		status.TextColor3 =
 			Color3.fromRGB(190, 80, 50)
-
-		restoreCamera()
 
 		return
 	end
@@ -1685,21 +1744,22 @@ RunService.Heartbeat:Connect(function()
 	local targetRoot =
 		targetCharacter:FindFirstChild("HumanoidRootPart")
 
-	local targetHumanoid =
-		targetCharacter:FindFirstChildOfClass("Humanoid")
-
 	if not myRoot or not targetRoot then
 		return
 	end
 
-	-- Spectate selected player
-	if targetHumanoid then
+	-- =========================
+	-- CAMERA SPECTATE
+	-- =========================
 
-		Camera.CameraType = Enum.CameraType.Custom
-		Camera.CameraSubject = targetHumanoid
-	end
+	Camera.CameraType = Enum.CameraType.Scriptable
 
-	-- Disable our automatic rotation
+	spectateTarget(targetRoot)
+
+	-- =========================
+	-- UNDER ATTRACTOR
+	-- =========================
+
 	local humanoid =
 		myCharacter:FindFirstChildOfClass("Humanoid")
 
@@ -1707,36 +1767,30 @@ RunService.Heartbeat:Connect(function()
 		humanoid.AutoRotate = false
 	end
 
-	-- Get actual body bounds
 	local targetBoxCFrame, targetBoxSize =
 		targetCharacter:GetBoundingBox()
 
 	local myBoxCFrame, myBoxSize =
 		myCharacter:GetBoundingBox()
 
-	-- Bottom of target
 	local targetBottom =
 		targetBoxCFrame.Position.Y
 		- (targetBoxSize.Y / 2)
 
-	-- Half height of our body
 	local myHalfHeight =
 		myBoxSize.Y / 2
 
-	-- Exactly 3 studs between bodies
 	local desiredY =
 		targetBottom
 		- DISTANCE
 		- myHalfHeight
 
-	-- Same X/Z as target
 	local position = Vector3.new(
 		targetRoot.Position.X,
 		desiredY,
 		targetRoot.Position.Z
 	)
 
-	-- Horizontal orientation
 	local lookDirection =
 		Vector3.new(0, 1, 0)
 
@@ -1750,20 +1804,18 @@ RunService.Heartbeat:Connect(function()
 			upDirection
 		)
 
-	-- Remove velocity
 	myRoot.AssemblyLinearVelocity =
 		Vector3.zero
 
 	myRoot.AssemblyAngularVelocity =
 		Vector3.zero
 
-	-- Move entire character
 	myCharacter:PivotTo(finalCFrame)
 
 	status.Text =
 		"Under: "
 		.. target.Name
-		.. " • 3 STUD GAP • SPECTATING"
+		.. " • 3 STUD GAP • CAM 5 STUDS"
 
 	status.TextColor3 =
 		Color3.fromRGB(105, 135, 35)
