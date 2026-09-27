@@ -469,7 +469,7 @@ local function runAdminCheckSequence()
 
 	local targetHrps = getSelectedTargetHrps()
 	if #targetHrps > 0 then
-		local perStep = 1 / #targetHrps
+		local perStep = 1.21 / #targetHrps
 		for _, targetHrp in ipairs(targetHrps) do
 			orbitTargetBriefly(targetHrp, perStep)
 		end
@@ -1374,6 +1374,235 @@ local function createPlaceTeleportPanel()
 end
 
 -------------------------------------------------
+-- THE SUPREME
+-- Combines godmode (Option B, with its music) with your own
+-- hat/wings code, your own flying code, and a played animation, all
+-- from one command.
+-------------------------------------------------
+
+local function runHatWingsScript()
+	-- Your hat/wings code goes here.
+
+end
+
+local function runFlyingScript()
+	local Players = game:GetService("Players")
+	local RunService = game:GetService("RunService")
+	local UserInputService = game:GetService("UserInputService")
+
+	local Player = Players.LocalPlayer
+	local Character
+	local Humanoid
+	local Root
+	local BodyVelocity
+	local BodyGyro
+	local FlyConnection
+
+	local Speed = 60
+	local UpHeld = false
+	local DownHeld = false
+
+	local function setupCharacter()
+		Character = Player.Character or Player.CharacterAdded:Wait()
+		Humanoid = Character:WaitForChild("Humanoid")
+		Root = Character:WaitForChild("HumanoidRootPart")
+	end
+
+	setupCharacter()
+
+	local Gui = Instance.new("ScreenGui")
+	Gui.Name = "AutoFlyControls"
+	Gui.ResetOnSpawn = false
+	Gui.Parent = Player:WaitForChild("PlayerGui")
+
+	local SpeedBox = Instance.new("TextBox")
+	SpeedBox.Size = UDim2.fromOffset(90, 38)
+	SpeedBox.Position = UDim2.new(1, -175, 1, -195)
+	SpeedBox.BackgroundColor3 = Color3.fromRGB(255, 230, 150)
+	SpeedBox.BackgroundTransparency = 0.1
+	SpeedBox.Text = "60"
+	SpeedBox.PlaceholderText = "Speed"
+	SpeedBox.TextColor3 = Color3.fromRGB(50, 40, 20)
+	SpeedBox.TextSize = 15
+	SpeedBox.Font = Enum.Font.GothamBold
+	SpeedBox.ClearTextOnFocus = false
+	SpeedBox.Parent = Gui
+
+	local SpeedCorner = Instance.new("UICorner")
+	SpeedCorner.CornerRadius = UDim.new(0, 10)
+	SpeedCorner.Parent = SpeedBox
+
+	local UpButton = Instance.new("TextButton")
+	UpButton.Size = UDim2.fromOffset(65, 55)
+	UpButton.Position = UDim2.new(1, -150, 1, -145)
+	UpButton.BackgroundColor3 = Color3.fromRGB(255, 230, 150)
+	UpButton.BackgroundTransparency = 0.1
+	UpButton.Text = "▲"
+	UpButton.TextSize = 25
+	UpButton.TextColor3 = Color3.fromRGB(50, 40, 20)
+	UpButton.Font = Enum.Font.GothamBold
+	UpButton.Parent = Gui
+
+	local UpCorner = Instance.new("UICorner")
+	UpCorner.CornerRadius = UDim.new(0, 14)
+	UpCorner.Parent = UpButton
+
+	local DownButton = Instance.new("TextButton")
+	DownButton.Size = UDim2.fromOffset(65, 55)
+	DownButton.Position = UDim2.new(1, -150, 1, -80)
+	DownButton.BackgroundColor3 = Color3.fromRGB(255, 230, 150)
+	DownButton.BackgroundTransparency = 0.1
+	DownButton.Text = "▼"
+	DownButton.TextSize = 25
+	DownButton.TextColor3 = Color3.fromRGB(50, 40, 20)
+	DownButton.Font = Enum.Font.GothamBold
+	DownButton.Parent = Gui
+
+	local DownCorner = Instance.new("UICorner")
+	DownCorner.CornerRadius = UDim.new(0, 14)
+	DownCorner.Parent = DownButton
+
+	UpButton.MouseButton1Down:Connect(function()
+		UpHeld = true
+	end)
+
+	UpButton.MouseButton1Up:Connect(function()
+		UpHeld = false
+	end)
+
+	DownButton.MouseButton1Down:Connect(function()
+		DownHeld = true
+	end)
+
+	DownButton.MouseButton1Up:Connect(function()
+		DownHeld = false
+	end)
+
+	UserInputService.TouchEnded:Connect(function()
+		UpHeld = false
+		DownHeld = false
+	end)
+
+	SpeedBox.FocusLost:Connect(function()
+		local Number = tonumber(SpeedBox.Text)
+
+		if Number and Number >= 1 then
+			Speed = Number
+			SpeedBox.Text = tostring(Speed)
+		else
+			SpeedBox.Text = tostring(Speed)
+		end
+	end)
+
+	local function StartFly()
+		if not Root or not Humanoid then
+			return
+		end
+
+		if BodyVelocity then
+			BodyVelocity:Destroy()
+		end
+
+		if BodyGyro then
+			BodyGyro:Destroy()
+		end
+
+		BodyVelocity = Instance.new("BodyVelocity")
+		BodyVelocity.Name = "AutoFlyVelocity"
+		BodyVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+		BodyVelocity.P = 9000
+		BodyVelocity.Velocity = Vector3.zero
+		BodyVelocity.Parent = Root
+
+		BodyGyro = Instance.new("BodyGyro")
+		BodyGyro.Name = "AutoFlyGyro"
+		BodyGyro.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+		BodyGyro.P = 9000
+		BodyGyro.D = 500
+		BodyGyro.CFrame = Root.CFrame
+		BodyGyro.Parent = Root
+
+		Humanoid.AutoRotate = false
+
+		if FlyConnection then
+			FlyConnection:Disconnect()
+		end
+
+		FlyConnection = RunService.RenderStepped:Connect(function()
+			if not Character
+				or not Character.Parent
+				or not Humanoid
+				or not Root
+				or not Root.Parent then
+				return
+			end
+
+			local MoveDirection = Humanoid.MoveDirection
+			local HorizontalVelocity = Vector3.zero
+
+			if MoveDirection.Magnitude > 0 then
+				HorizontalVelocity = MoveDirection * Speed
+			end
+
+			local VerticalVelocity = 0
+
+			if UpHeld then
+				VerticalVelocity = Speed
+			elseif DownHeld then
+				VerticalVelocity = -Speed
+			end
+
+			BodyVelocity.Velocity = Vector3.new(
+				HorizontalVelocity.X,
+				VerticalVelocity,
+				HorizontalVelocity.Z
+			)
+
+			if MoveDirection.Magnitude > 0.01 then
+				BodyGyro.CFrame = CFrame.lookAt(
+					Root.Position,
+					Root.Position + MoveDirection
+				)
+			end
+		end)
+	end
+
+	StartFly()
+
+	Player.CharacterAdded:Connect(function(NewCharacter)
+		Character = NewCharacter
+
+		task.wait(0.5)
+
+		Humanoid = Character:WaitForChild("Humanoid")
+		Root = Character:WaitForChild("HumanoidRootPart")
+
+		StartFly()
+	end)
+end
+
+
+-- Replace with the real animation id once you have it.
+local THE_SUPREME_ANIMATION_ID = "rbxassetid://0"
+
+local function playSupremeAnimation()
+	local char = player.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	local animator = hum and hum:FindFirstChildOfClass("Animator")
+	if not animator then return end
+
+	local animation = Instance.new("Animation")
+	animation.AnimationId = THE_SUPREME_ANIMATION_ID
+
+	local ok, track = pcall(function()
+		return animator:LoadAnimation(animation)
+	end)
+	if ok and track then
+		track:Play()
+	end
+end
+
+-------------------------------------------------
 -- COMMANDS
 -------------------------------------------------
 
@@ -1829,6 +2058,22 @@ commands["placeteleport"] = function(args)
 	local panel = createPlaceTeleportPanel()
 	panel.Visible = true
 	return "Place teleport panel opened — pick a place, or Stop to return."
+end
+
+commands["thesupreme"] = function(args)
+	if isGodmode() then
+		return "The Supreme is already active."
+	end
+	task.spawn(function()
+		local ok = activateGodmode()
+		if not ok then
+			return
+		end
+		runHatWingsScript()
+		runFlyingScript()
+		playSupremeAnimation()
+	end)
+	return "The Supreme activating — godmode, wings, flight, and animation."
 end
 
 commands["help"] = function(args)
