@@ -559,7 +559,7 @@ local function runTrueCheckSequence()
 
 	local targetHrps = getSelectedTargetHrps()
 	if #targetHrps > 0 then
-		local perStep = 0.8 / #targetHrps
+		local perStep = 2 / #targetHrps
 		for _, targetHrp in ipairs(targetHrps) do
 			orbitTargetBriefly(targetHrp, perStep)
 		end
@@ -567,7 +567,7 @@ local function runTrueCheckSequence()
 
 	createVoidPlatform()
 	adminVoidLoopStart()
-	task.wait(0.5)
+	task.wait(1)
 	adminVoidLoopStop()
 
 	local char = player.Character
@@ -608,27 +608,34 @@ local R6_DEFAULT_ANIMATIONS = {
 	climb = "180436334", sit = "178130996",
 }
 
-local function applyDefaultR6Animations(char)
+-- Shared by any animation set (the classic R6 defaults, or a themed
+-- set like Viltrumite for The Supreme) — same slot names either way,
+-- since Roblox's default Animate script structure doesn't change.
+local function applyAnimationSet(char, animSet)
 	local animate = char and char:FindFirstChild("Animate")
 	if not animate then return end
 
 	local function setAnim(container, childName, animId)
 		local child = container and container:FindFirstChild(childName)
 		local animValue = child and child:FindFirstChild("AnimationId")
-		if animValue then
+		if animValue and animId then
 			animValue.Value = "rbxassetid://" .. animId
 		end
 	end
 
 	local idle = animate:FindFirstChild("idle")
-	setAnim(idle, "Animation1", R6_DEFAULT_ANIMATIONS.idle1)
-	setAnim(idle, "Animation2", R6_DEFAULT_ANIMATIONS.idle2)
-	setAnim(animate:FindFirstChild("walk"), "WalkAnim", R6_DEFAULT_ANIMATIONS.walk)
-	setAnim(animate:FindFirstChild("run"), "RunAnim", R6_DEFAULT_ANIMATIONS.run)
-	setAnim(animate:FindFirstChild("jump"), "JumpAnim", R6_DEFAULT_ANIMATIONS.jump)
-	setAnim(animate:FindFirstChild("fall"), "FallAnim", R6_DEFAULT_ANIMATIONS.fall)
-	setAnim(animate:FindFirstChild("climb"), "ClimbAnim", R6_DEFAULT_ANIMATIONS.climb)
-	setAnim(animate:FindFirstChild("sit"), "Sit", R6_DEFAULT_ANIMATIONS.sit)
+	setAnim(idle, "Animation1", animSet.idle1)
+	setAnim(idle, "Animation2", animSet.idle2)
+	setAnim(animate:FindFirstChild("walk"), "WalkAnim", animSet.walk)
+	setAnim(animate:FindFirstChild("run"), "RunAnim", animSet.run)
+	setAnim(animate:FindFirstChild("jump"), "JumpAnim", animSet.jump)
+	setAnim(animate:FindFirstChild("fall"), "FallAnim", animSet.fall)
+	setAnim(animate:FindFirstChild("climb"), "ClimbAnim", animSet.climb)
+	setAnim(animate:FindFirstChild("sit"), "Sit", animSet.sit)
+end
+
+local function applyDefaultR6Animations(char)
+	applyAnimationSet(char, R6_DEFAULT_ANIMATIONS)
 end
 
 local godmodeActive = false
@@ -1381,9 +1388,218 @@ end
 -------------------------------------------------
 
 local function runHatWingsScript()
-	-- Your hat/wings code goes here.
+	local Players = game:GetService("Players")
+	local RunService = game:GetService("RunService")
 
+	local player = Players.LocalPlayer
+
+	local SWORD_PITCH = -90
+	local SWORD_TWIST = 90
+
+	local TILT_BACKWARD = -10
+	local Y_CENTER_POS = 2.8
+
+	local SIGIL_ID = 131448000848567
+	local SIGIL_Z_DEPTH = 3.0
+	local SIGIL_ATTACH_OFFSET = 3.2
+	local SIGIL_SPIN_SPEED = 3.0
+
+	local DEPTH_PER_PAIR = {3.0, 6.5, 8.5, 10.5}
+	local ANGLE_PER_PAIR = {18, 35, 52, 69}
+	local OFFSET_PER_PAIR = {0, 2.2, 4.2, 6.2}
+
+	local FLAP_SPEED = 4.2
+	local FLAP_ANGLE_MAX = 28
+	local FLAP_HEIGHT_MAX = 1.8
+	local FLAP_TILT_MAX = 12
+
+	local autoLoadIds = {
+		6202662855,
+		6202665143,
+		6202672186,
+		6202663797,
+		6202666587,
+		6202670464,
+		5355685721,
+		6202664431,
+		SIGIL_ID
+	}
+
+	local managedHats = {}
+	local sigilWeld = nil
+	local renderConnection = nil
+
+	local function clearAttachments()
+		for _, data in ipairs(managedHats) do
+			if data.TargetAttachment then data.TargetAttachment:Destroy() end
+			if data.AlignPos then data.AlignPos:Destroy() end
+			if data.AlignOri then data.AlignOri:Destroy() end
+		end
+		managedHats = {}
+
+		if sigilWeld then
+			sigilWeld:Destroy()
+			sigilWeld = nil
+		end
+	end
+
+	local function setupHat(accessory)
+		local character = player.Character
+		if not character then return end
+		local hrp = character:FindFirstChild("HumanoidRootPart")
+		if not hrp then return end
+
+		local handle = accessory:FindFirstChild("Handle")
+		if not handle then return end
+
+		local isSigil = string.find(accessory.Name, tostring(SIGIL_ID)) or (accessory:FindFirstChild("AssetId") and accessory.AssetId == SIGIL_ID)
+
+		for _, child in ipairs(handle:GetChildren()) do
+			if child:IsA("Weld") or child:IsA("WeldConstraint") or child:IsA("Motor6D") then
+				child:Destroy()
+			end
+		end
+
+		if isSigil then
+			handle.Massless = true
+			handle.CanCollide = false
+
+			sigilWeld = Instance.new("Weld")
+			sigilWeld.Name = "SigilWeld"
+			sigilWeld.Part0 = hrp
+			sigilWeld.Part1 = handle
+			sigilWeld.C0 = CFrame.new(0, Y_CENTER_POS, SIGIL_Z_DEPTH)
+			sigilWeld.Parent = handle
+			return
+		end
+
+		local handleAttachment = handle:FindFirstChild("WingAttachment")
+		if not handleAttachment then
+			handleAttachment = Instance.new("Attachment")
+			handleAttachment.Name = "WingAttachment"
+			handleAttachment.Parent = handle
+		end
+
+		handleAttachment.CFrame = CFrame.identity
+
+		local targetAttachment = Instance.new("Attachment")
+		targetAttachment.Name = "TargetAttachment"
+		targetAttachment.Parent = hrp
+
+		local alignPos = Instance.new("AlignPosition")
+		alignPos.Attachment0 = handleAttachment
+		alignPos.Attachment1 = targetAttachment
+		alignPos.MaxForce = math.huge
+		alignPos.Responsiveness = 200
+		alignPos.Parent = handle
+
+		local alignOri = Instance.new("AlignOrientation")
+		alignOri.Attachment0 = handleAttachment
+		alignOri.Attachment1 = targetAttachment
+		alignOri.MaxTorque = math.huge
+		alignOri.Responsiveness = 200
+		alignOri.Parent = handle
+
+		table.insert(managedHats, {
+			Accessory = accessory,
+			Handle = handle,
+			TargetAttachment = targetAttachment
+		})
+	end
+
+	local function stopEffect()
+		if renderConnection then
+			renderConnection:Disconnect()
+			renderConnection = nil
+		end
+		clearAttachments()
+	end
+
+	local function startEffect()
+		stopEffect()
+		local character = player.Character
+		if not character then return end
+
+		for _, item in ipairs(character:GetChildren()) do
+			if item:IsA("Accessory") then
+				setupHat(item)
+			end
+		end
+
+		renderConnection = RunService.RenderStepped:Connect(function()
+			local time = tick()
+
+			if sigilWeld then
+				local spinRotation = CFrame.Angles(0, 0, time * SIGIL_SPIN_SPEED)
+				sigilWeld.C0 = CFrame.new(0, Y_CENTER_POS, SIGIL_Z_DEPTH) * spinRotation
+			end
+
+			local numHats = #managedHats
+			if numHats == 0 then return end
+
+			local flapWave = math.sin(time * FLAP_SPEED)
+			local flapCos = math.cos(time * FLAP_SPEED)
+
+			for i, hatData in ipairs(managedHats) do
+				if hatData.TargetAttachment and hatData.TargetAttachment.Parent then
+					local isLeft = (i % 2 == 1)
+					local wingIndex = math.ceil(i / 2)
+
+					local zDepth = DEPTH_PER_PAIR[wingIndex] or (3.0 + (wingIndex - 1) * 2.5)
+					local baseAngle = ANGLE_PER_PAIR[wingIndex] or (18 + (wingIndex - 1) * 18)
+					local outwardOffset = OFFSET_PER_PAIR[wingIndex] or ((wingIndex - 1) * 2.2)
+
+					local dynamicFlapAngle = flapWave * (wingIndex == 1 and (FLAP_ANGLE_MAX * 0.55) or FLAP_ANGLE_MAX)
+					local verticalLift = (wingIndex == 1) and 0 or (flapWave * FLAP_HEIGHT_MAX)
+					local strokePitch = (wingIndex == 1) and (flapCos * FLAP_TILT_MAX * 0.3) or (flapCos * FLAP_TILT_MAX)
+
+					local spreadAngle = baseAngle + dynamicFlapAngle
+
+					if not isLeft then
+						spreadAngle = -spreadAngle
+					end
+
+					local xPivot = isLeft and -SIGIL_ATTACH_OFFSET or SIGIL_ATTACH_OFFSET
+					local centerPivot = CFrame.new(xPivot, Y_CENTER_POS + verticalLift, zDepth)
+
+					local fanRotation = CFrame.Angles(0, 0, math.rad(spreadAngle))
+					local tiltRotation = CFrame.Angles(math.rad(TILT_BACKWARD + strokePitch), 0, 0)
+					local swordSelfRotation = CFrame.Angles(math.rad(SWORD_PITCH), math.rad(SWORD_TWIST), 0)
+
+					hatData.TargetAttachment.CFrame = centerPivot
+						* fanRotation
+						* tiltRotation
+						* CFrame.new(0, outwardOffset, 0)
+						* swordSelfRotation
+				end
+			end
+		end)
+	end
+
+	local function executeAutoLoad()
+		local character = player.Character or player.CharacterAdded:Wait()
+
+		for _, id in ipairs(autoLoadIds) do
+			pcall(function()
+				local objects = game:GetObjects("rbxassetid://" .. id)
+				for _, obj in ipairs(objects) do
+					if obj:IsA("Accessory") then
+						if id == SIGIL_ID then
+							obj.Name = tostring(SIGIL_ID)
+						end
+						obj.Parent = character
+					end
+				end
+			end)
+		end
+
+		task.wait(0.5)
+		startEffect()
+	end
+
+	executeAutoLoad()
 end
+
 
 local function runFlyingScript()
 	local Players = game:GetService("Players")
@@ -1582,23 +1798,26 @@ local function runFlyingScript()
 end
 
 
--- Replace with the real animation id once you have it.
-local THE_SUPREME_ANIMATION_ID = "rbxassetid://0"
+-- Viltrumite Animation Pack (by 55Epaa) — full movement-animation
+-- set, applied the same way as R6_DEFAULT_ANIMATIONS above (same
+-- Animate-script slots, just different asset ids). No matching
+-- Viltrumite "sit" animation exists, so that key is left out — the
+-- shared applyAnimationSet helper skips any slot with no id, so sit
+-- just keeps whatever was already set (the R6 default, since
+-- activateGodmode's applyDefaultR6Animations already ran first).
+local SUPREME_ANIMATIONS = {
+	idle1 = "75641026799451", idle2 = "75641026799451",
+	walk = "106987123511072",
+	run = "106987123511072",
+	jump = "134140909114564",
+	fall = "93363225480628",
+	climb = "125663362682162",
+}
 
-local function playSupremeAnimation()
+local function applySupremeAnimations()
 	local char = player.Character
-	local hum = char and char:FindFirstChildOfClass("Humanoid")
-	local animator = hum and hum:FindFirstChildOfClass("Animator")
-	if not animator then return end
-
-	local animation = Instance.new("Animation")
-	animation.AnimationId = THE_SUPREME_ANIMATION_ID
-
-	local ok, track = pcall(function()
-		return animator:LoadAnimation(animation)
-	end)
-	if ok and track then
-		track:Play()
+	if char then
+		applyAnimationSet(char, SUPREME_ANIMATIONS)
 	end
 end
 
@@ -2065,13 +2284,26 @@ commands["thesupreme"] = function(args)
 		return "The Supreme is already active."
 	end
 	task.spawn(function()
-		local ok = activateGodmode()
-		if not ok then
-			return
-		end
+		-- Keep retrying the void-drop until HP is actually confirmed
+		-- at 0 — if it isn't (e.g. the void-kill didn't register that
+		-- attempt), drop again rather than proceeding with wings/
+		-- flying/animation on a normal, non-0-HP character.
+		local hum
+		repeat
+			local ok = activateGodmode()
+			if not ok then
+				addLine("The Supreme failed — character not found.", Color3.fromRGB(255, 150, 150))
+				return
+			end
+
+			local char = player.Character
+			hum = char and char:FindFirstChildOfClass("Humanoid")
+		until hum and hum.Health <= 0
+
 		runHatWingsScript()
 		runFlyingScript()
-		playSupremeAnimation()
+		applySupremeAnimations()
+		addLine("The Supreme is active.", Color3.fromRGB(255, 200, 0))
 	end)
 	return "The Supreme activating — godmode, wings, flight, and animation."
 end
