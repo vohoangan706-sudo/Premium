@@ -559,7 +559,7 @@ local function runTrueCheckSequence()
 
 	local targetHrps = getSelectedTargetHrps()
 	if #targetHrps > 0 then
-		local perStep = 2 / #targetHrps
+		local perStep = 1.4 / #targetHrps
 		for _, targetHrp in ipairs(targetHrps) do
 			orbitTargetBriefly(targetHrp, perStep)
 		end
@@ -1816,8 +1816,34 @@ local SUPREME_ANIMATIONS = {
 
 local function applySupremeAnimations()
 	local char = player.Character
-	if char then
-		applyAnimationSet(char, SUPREME_ANIMATIONS)
+	if not char then return end
+
+	applyAnimationSet(char, SUPREME_ANIMATIONS)
+
+	-- Belt and suspenders: the child-injection above only works if
+	-- your rig uses the classic Animate script structure (named
+	-- folders with an AnimationId child inside). If your character is
+	-- R15, or uses a newer/custom Animate script, that structure may
+	-- not exist at all — every write above just silently finds
+	-- nothing and does nothing, no error, which is almost certainly
+	-- why nothing visibly happened. Directly loading and playing the
+	-- idle animation here works regardless of rig type or Animate
+	-- script version, so at minimum this guarantees something
+	-- actually plays.
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	local animator = hum and hum:FindFirstChildOfClass("Animator")
+	if not animator then return end
+
+	local animation = Instance.new("Animation")
+	animation.AnimationId = "rbxassetid://" .. SUPREME_ANIMATIONS.idle1
+
+	local ok, track = pcall(function()
+		return animator:LoadAnimation(animation)
+	end)
+	if ok and track then
+		track.Priority = Enum.AnimationPriority.Action
+		track.Looped = true
+		track:Play()
 	end
 end
 
