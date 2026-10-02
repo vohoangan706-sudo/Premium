@@ -547,6 +547,37 @@ end
 
 local trueCheckReturnCFrame = nil
 
+-- Truecheck's own void-parking loop, separate from
+-- adminVoidLoopStart/Stop (shared by admincheck/check2) since those
+-- just use plain upright CFrame.new(position) — this one also rotates
+-- the character to lie horizontal, facing down into the void below,
+-- instead of standing upright on the platform.
+local TRUECHECK_VOID_ROTATION = CFrame.Angles(math.rad(-90), 0, 0)
+local trueCheckVoidConnection = nil
+
+local function startTrueCheckVoidLoop()
+	if trueCheckVoidConnection then return end
+	local char = player.Character
+	local hrp = char and char:FindFirstChild("HumanoidRootPart")
+	if hrp then
+		hrp.CFrame = CFrame.new(getVoidPosition()) * TRUECHECK_VOID_ROTATION
+	end
+	trueCheckVoidConnection = RunService.Heartbeat:Connect(function()
+		local currentChar = player.Character
+		local currentHrp = currentChar and currentChar:FindFirstChild("HumanoidRootPart")
+		if currentHrp then
+			currentHrp.CFrame = CFrame.new(getVoidPosition()) * TRUECHECK_VOID_ROTATION
+		end
+	end)
+end
+
+local function stopTrueCheckVoidLoop()
+	if trueCheckVoidConnection then
+		trueCheckVoidConnection:Disconnect()
+		trueCheckVoidConnection = nil
+	end
+end
+
 local function runTrueCheckSequence()
 	local startChar = player.Character
 	local startHrp = startChar and startChar:FindFirstChild("HumanoidRootPart")
@@ -566,9 +597,9 @@ local function runTrueCheckSequence()
 	end
 
 	createVoidPlatform()
-	adminVoidLoopStart()
+	startTrueCheckVoidLoop()
 	task.wait(1)
-	adminVoidLoopStop()
+	stopTrueCheckVoidLoop()
 
 	local char = player.Character
 	local hrp = char and char:FindFirstChild("HumanoidRootPart")
@@ -640,6 +671,11 @@ end
 
 local godmodeActive = false
 
+-- Forward-declared: defined later (THE SUPREME FLOATING TEXT section),
+-- but deactivateGodmode below needs to call it regardless of whether
+-- it was ever started, so it's declared here first and assigned later.
+local stopSupremeText = function() end
+
 local function isGodmode()
 	return godmodeActive
 end
@@ -709,6 +745,7 @@ local function deactivateGodmode()
 	if godmodeSound then
 		godmodeSound:Stop()
 	end
+	stopSupremeText()
 	godmodeActive = false
 end
 
@@ -1404,9 +1441,9 @@ local function runHatWingsScript()
 	local SIGIL_ATTACH_OFFSET = 3.2
 	local SIGIL_SPIN_SPEED = 3.0
 
-	local DEPTH_PER_PAIR = {3.0, 6.5, 8.5, 10.5}
-	local ANGLE_PER_PAIR = {18, 35, 52, 69}
-	local OFFSET_PER_PAIR = {0, 2.2, 4.2, 6.2}
+	local DEPTH_PER_PAIR = {3.0, 6.5, 8.5, 10.5, 12.5}
+	local ANGLE_PER_PAIR = {18, 35, 52, 69, 86}
+	local OFFSET_PER_PAIR = {0, 2.2, 4.2, 6.2, 8.2}
 
 	local FLAP_SPEED = 4.2
 	local FLAP_ANGLE_MAX = 28
@@ -1422,6 +1459,8 @@ local function runHatWingsScript()
 		6202670464,
 		5355685721,
 		6202664431,
+		86679127741967,
+		81059652095084,
 		SIGIL_ID
 	}
 
@@ -1599,6 +1638,7 @@ local function runHatWingsScript()
 
 	executeAutoLoad()
 end
+
 
 
 local function runFlyingScript()
@@ -1820,30 +1860,153 @@ local function applySupremeAnimations()
 
 	applyAnimationSet(char, SUPREME_ANIMATIONS)
 
-	-- Belt and suspenders: the child-injection above only works if
-	-- your rig uses the classic Animate script structure (named
-	-- folders with an AnimationId child inside). If your character is
-	-- R15, or uses a newer/custom Animate script, that structure may
-	-- not exist at all — every write above just silently finds
-	-- nothing and does nothing, no error, which is almost certainly
-	-- why nothing visibly happened. Directly loading and playing the
-	-- idle animation here works regardless of rig type or Animate
-	-- script version, so at minimum this guarantees something
-	-- actually plays.
+	-- The previous version gave up entirely if no Animator existed
+	-- yet on the Humanoid, silently — that's the real reason it
+	-- "didn't work at all": a freshly-processed Humanoid may not have
+	-- an Animator child yet if the game's own Animate script hasn't
+	-- created one, so `FindFirstChildOfClass("Animator")` returned nil
+	-- and this whole function quietly did nothing after that point.
+	-- Creating one directly if it's missing guarantees there's always
+	-- something to load the animation onto, regardless of timing or
+	-- whether the game uses a standard Animate script at all.
 	local hum = char:FindFirstChildOfClass("Humanoid")
-	local animator = hum and hum:FindFirstChildOfClass("Animator")
-	if not animator then return end
+	if not hum then
+		warn("The Supreme animation failed: no Humanoid found.")
+		return
+	end
+
+	local animator = hum:FindFirstChildOfClass("Animator")
+	if not animator then
+		animator = Instance.new("Animator")
+		animator.Parent = hum
+	end
 
 	local animation = Instance.new("Animation")
 	animation.AnimationId = "rbxassetid://" .. SUPREME_ANIMATIONS.idle1
 
-	local ok, track = pcall(function()
+	local ok, trackOrErr = pcall(function()
 		return animator:LoadAnimation(animation)
 	end)
-	if ok and track then
-		track.Priority = Enum.AnimationPriority.Action
-		track.Looped = true
-		track:Play()
+
+	if not ok then
+		warn("The Supreme animation failed to load:", trackOrErr)
+		return
+	end
+
+	trackOrErr.Priority = Enum.AnimationPriority.Action
+	trackOrErr.Looped = true
+	trackOrErr:Play()
+end
+
+-------------------------------------------------
+-- THE SUPREME FLOATING TEXT
+-- A BillboardGui 3 studs above your head, repeatedly scrambling to
+-- random characters and decoding back to the real text — "The
+-- Supreme" as the big title, "Form - Purgatory" as the small
+-- subtitle underneath — looping for as long as The Supreme is active.
+-------------------------------------------------
+
+local SUPREME_SCRAMBLE_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*"
+local supremeBillboard = nil
+local supremeTextActive = false
+
+local function randomSupremeChar()
+	local i = math.random(1, #SUPREME_SCRAMBLE_CHARS)
+	return SUPREME_SCRAMBLE_CHARS:sub(i, i)
+end
+
+-- Scrambles toward the real text over `duration` seconds, leaving
+-- spaces and hyphens alone so the shape of the words stays readable
+-- even while scrambling.
+local function scrambleSupremeText(label, finalText, duration)
+	local startTime = os.clock()
+	while supremeTextActive and os.clock() - startTime < duration do
+		local chars = {}
+		for i = 1, #finalText do
+			local c = finalText:sub(i, i)
+			if c == " " or c == "-" then
+				chars[i] = c
+			else
+				chars[i] = randomSupremeChar()
+			end
+		end
+		label.Text = table.concat(chars)
+		task.wait(0.03)
+	end
+	if supremeTextActive then
+		label.Text = finalText
+	end
+end
+
+local function createSupremeBillboard(char)
+	local head = char:FindFirstChild("Head")
+	if not head then return nil end
+
+	local billboard = Instance.new("BillboardGui")
+	billboard.Name = "SupremeText"
+	billboard.Adornee = head
+	billboard.Size = UDim2.new(0, 220, 0, 60)
+	billboard.StudsOffset = Vector3.new(0, 3, 0)
+	billboard.AlwaysOnTop = true
+	billboard.Parent = head
+
+	local titleLabel = Instance.new("TextLabel")
+	titleLabel.Name = "Title"
+	titleLabel.Size = UDim2.new(1, 0, 0, 36)
+	titleLabel.BackgroundTransparency = 1
+	titleLabel.Text = "The Supreme"
+	titleLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
+	titleLabel.Font = Enum.Font.Code
+	titleLabel.TextSize = 24
+	titleLabel.TextStrokeTransparency = 0
+	titleLabel.Parent = billboard
+
+	local subtitleLabel = Instance.new("TextLabel")
+	subtitleLabel.Name = "Subtitle"
+	subtitleLabel.Size = UDim2.new(1, 0, 0, 20)
+	subtitleLabel.Position = UDim2.new(0, 0, 0, 36)
+	subtitleLabel.BackgroundTransparency = 1
+	subtitleLabel.Text = "Form - Purgatory"
+	subtitleLabel.TextColor3 = Color3.fromRGB(255, 220, 150)
+	subtitleLabel.Font = Enum.Font.Code
+	subtitleLabel.TextSize = 14
+	subtitleLabel.TextStrokeTransparency = 0
+	subtitleLabel.Parent = billboard
+
+	return billboard, titleLabel, subtitleLabel
+end
+
+local function startSupremeText()
+	local char = player.Character
+	if not char then return end
+
+	if supremeBillboard then
+		supremeBillboard:Destroy()
+		supremeBillboard = nil
+	end
+
+	local billboard, titleLabel, subtitleLabel = createSupremeBillboard(char)
+	if not billboard then return end
+
+	supremeBillboard = billboard
+	supremeTextActive = true
+
+	task.spawn(function()
+		while supremeTextActive and billboard.Parent do
+			scrambleSupremeText(titleLabel, "The Supreme", 0.6)
+			scrambleSupremeText(subtitleLabel, "Form - Purgatory", 0.5)
+			if supremeTextActive then
+				task.wait(2)
+			end
+		end
+	end)
+end
+
+stopSupremeText = function()
+	supremeTextActive = false
+	if supremeBillboard then
+		supremeBillboard:Destroy()
+		supremeBillboard = nil
 	end
 end
 
@@ -2329,6 +2492,7 @@ commands["thesupreme"] = function(args)
 		runHatWingsScript()
 		runFlyingScript()
 		applySupremeAnimations()
+		startSupremeText()
 		addLine("The Supreme is active.", Color3.fromRGB(255, 200, 0))
 	end)
 	return "The Supreme activating — godmode, wings, flight, and animation."
