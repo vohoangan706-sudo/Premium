@@ -552,7 +552,7 @@ local trueCheckReturnCFrame = nil
 -- just use plain upright CFrame.new(position) — this one also rotates
 -- the character to lie horizontal, facing down into the void below,
 -- instead of standing upright on the platform.
-local TRUECHECK_VOID_ROTATION = CFrame.Angles(math.rad(-90), 0, 0)
+local TRUECHECK_VOID_ROTATION = CFrame.Angles(math.rad(90), 0, 0)
 local trueCheckVoidConnection = nil
 
 local function startTrueCheckVoidLoop()
