@@ -553,7 +553,6 @@ local trueCheckReturnCFrame = nil
 -- the character to lie horizontal, facing down into the void below,
 -- instead of standing upright on the platform.
 local TRUECHECK_VOID_ROTATION = CFrame.Angles(math.rad(-90), 0, 0) -- pitch -90: front (-Z) points straight down
-local TRUECHECK_VOID_DROP = 1 -- studs lower than the normal void position while lying horizontal
 local trueCheckVoidConnection = nil
 local trueCheckVoidRenderConnection = nil
 local trueCheckSavedAutoRotate = nil
@@ -575,7 +574,7 @@ local function applyTrueCheckPose()
 	end
 	hrp.AssemblyLinearVelocity = Vector3.zero
 	hrp.AssemblyAngularVelocity = Vector3.zero
-	hrp.CFrame = CFrame.new(getVoidPosition() - Vector3.new(0, TRUECHECK_VOID_DROP, 0)) * TRUECHECK_VOID_ROTATION
+	hrp.CFrame = CFrame.new(getVoidPosition()) * TRUECHECK_VOID_ROTATION
 end
 
 local function startTrueCheckVoidLoop()
