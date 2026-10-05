@@ -594,39 +594,23 @@ local function createTrueCheckPlatform()
 	trueCheckPlatform = platform
 end
 
-local TRUECHECK_VOID_ROTATION = CFrame.Angles(math.rad(-90), 0, 0) -- pitch -90: front (-Z) points straight down
+local TRUECHECK_STAGE1_POSITION = Vector3.new(0, -444, 0) -- first stop, held 0.5s
+local trueCheckCurrentTarget = TRUECHECK_VOID_POSITION
 local trueCheckVoidConnection = nil
-local trueCheckVoidRenderConnection = nil
-local trueCheckSavedAutoRotate = nil
 
 local function applyTrueCheckPose()
 	local char = player.Character
 	local hrp = char and char:FindFirstChild("HumanoidRootPart")
 	if not hrp then return end
-	-- kill anything that fights the rotation (fly script's gyro, humanoid upright force)
-	for _, d in ipairs(hrp:GetChildren()) do
-		if d:IsA("BodyGyro") or d:IsA("AlignOrientation") then
-			d.Enabled = false
-		end
-	end
-	local hum = char:FindFirstChildOfClass("Humanoid")
-	if hum then
-		hum.PlatformStand = true
-		hum.AutoRotate = false
-	end
 	hrp.AssemblyLinearVelocity = Vector3.zero
 	hrp.AssemblyAngularVelocity = Vector3.zero
-	hrp.CFrame = CFrame.new(TRUECHECK_VOID_POSITION) * TRUECHECK_VOID_ROTATION
+	hrp.CFrame = CFrame.new(trueCheckCurrentTarget) -- upright, no rotation
 end
 
 local function startTrueCheckVoidLoop()
 	if trueCheckVoidConnection then return end
-	local char = player.Character
-	local hum = char and char:FindFirstChildOfClass("Humanoid")
-	trueCheckSavedAutoRotate = hum and hum.AutoRotate
 	applyTrueCheckPose()
 	trueCheckVoidConnection = RunService.Heartbeat:Connect(applyTrueCheckPose)
-	trueCheckVoidRenderConnection = RunService.RenderStepped:Connect(applyTrueCheckPose)
 end
 
 local function stopTrueCheckVoidLoop()
@@ -634,105 +618,88 @@ local function stopTrueCheckVoidLoop()
 		trueCheckVoidConnection:Disconnect()
 		trueCheckVoidConnection = nil
 	end
-	if trueCheckVoidRenderConnection then
-		trueCheckVoidRenderConnection:Disconnect()
-		trueCheckVoidRenderConnection = nil
-	end
-	local char = player.Character
-	local hum = char and char:FindFirstChildOfClass("Humanoid")
-	if hum then
-		hum.PlatformStand = false
-		if trueCheckSavedAutoRotate ~= nil then hum.AutoRotate = trueCheckSavedAutoRotate end
-	end
-	local hrp = char and char:FindFirstChild("HumanoidRootPart")
-	if hrp then
-		for _, d in ipairs(hrp:GetChildren()) do
-			if d:IsA("BodyGyro") or d:IsA("AlignOrientation") then
-				d.Enabled = true
-			end
-		end
-	end
 end
 
 -- ######################################################################
 -- #  TRUECHECK CUSTOM CODE ZONE
--- #  Runs at the very START of every truecheck (before the key check
--- #  and the orbit sweep). Wrapped in pcall, so an error in your code
+-- #  Runs at the very START of every truecheck (before the orbit sweep).
+-- #  The original opening steps (save return spot, key check, 0.3s wait)
+-- #  now live inside it — keep them unless you mean to change them. Wrapped in pcall, so an error in your code
 -- #  can't break the rest of truecheck. Locals in here don't count
 -- #  toward the 200-local limit. Available: `player`, `selectedCheckPlayers`.
 -- #  ONLY PASTE BETWEEN THE "START" AND "END" LINES BELOW.
 -- ######################################################################
 local function runTrueCheckCustomCode()
 	-- vvvvvvvvvvvvvvvvvvvv  START OF YOUR CODE  vvvvvvvvvvvvvvvvvvvv
-local RunService = game:GetService("RunService")
-local localPlayer = game:GetService("Players").LocalPlayer
+	local RunService = game:GetService("RunService")
+	local localPlayer = game:GetService("Players").LocalPlayer
 
-workspace.FallenPartsDestroyHeight = (0/0)
+	workspace.FallenPartsDestroyHeight = (0/0)
 
-workspace:GetPropertyChangedSignal("FallenPartsDestroyHeight"):Connect(function()
-	local fallenPartsDestroyHeight = workspace.FallenPartsDestroyHeight
+	workspace:GetPropertyChangedSignal("FallenPartsDestroyHeight"):Connect(function()
+		local fallenPartsDestroyHeight = workspace.FallenPartsDestroyHeight
 
-	if fallenPartsDestroyHeight == fallenPartsDestroyHeight then
-		workspace.FallenPartsDestroyHeight = (0/0)
-	end
-end)
-
-local part = Instance.new("Part", workspace)
-part.CFrame = CFrame.new(0, -10008, 0)
-part.Anchored = true
-part.Size = Vector3.new(2048, 10, 2048)
-part.Transparency = 0.5
-part.CanCollide = true
-part.Name = game:GetService("HttpService"):GenerateGUID()
-local health = 100
-local connection = nil
-local connection2 = nil
-
-local function fn8(arg)
-	if not arg then
-		return
-	end
-	local humanoid = arg:FindFirstChildOfClass("Humanoid") or arg:WaitForChild("Humanoid", 3)
-	local humanoidRootPart = arg:FindFirstChild("HumanoidRootPart") or arg:WaitForChild("HumanoidRootPart", 3)
-	if not humanoid or not humanoidRootPart then
-		return
-	end
-	health = humanoid.Health
-
-	if connection then
-		connection:Disconnect()
-		connection = nil
-	end
-
-	if connection2 then
-		connection2:Disconnect()
-		connection2 = nil
-	end
-
-	connection2 = RunService.RenderStepped:Connect(function()
-		local humanoidRootPart2 = arg:FindFirstChild("HumanoidRootPart")
-
-		if humanoidRootPart2 then
-			health = humanoid.Health
-			part.CFrame = CFrame.new(humanoidRootPart2.Position.X, -10008, humanoidRootPart2.Position.Z)
+		if fallenPartsDestroyHeight == fallenPartsDestroyHeight then
+			workspace.FallenPartsDestroyHeight = (0/0)
 		end
 	end)
 
-	connection = humanoid.HealthChanged:Connect(function(health2)
-		local humanoidRootPart2 = arg:FindFirstChild("HumanoidRootPart")
+	local part = Instance.new("Part", workspace)
+	part.CFrame = CFrame.new(0, -10008, 0)
+	part.Anchored = true
+	part.Size = Vector3.new(2048, 10, 2048)
+	part.Transparency = 0.5
+	part.CanCollide = true
+	part.Name = game:GetService("HttpService"):GenerateGUID()
+	local health = 100
+	local connection = nil
+	local connection2 = nil
 
-		if health2 <= 0 and humanoidRootPart2 and humanoidRootPart2.CFrame.Y <= 0 then
-			humanoid.Health = health
+	local function fn8(arg)
+		if not arg then
+			return
 		end
+		local humanoid = arg:FindFirstChildOfClass("Humanoid") or arg:WaitForChild("Humanoid", 3)
+		local humanoidRootPart = arg:FindFirstChild("HumanoidRootPart") or arg:WaitForChild("HumanoidRootPart", 3)
+		if not humanoid or not humanoidRootPart then
+			return
+		end
+		health = humanoid.Health
+
+		if connection then
+			connection:Disconnect()
+			connection = nil
+		end
+
+		if connection2 then
+			connection2:Disconnect()
+			connection2 = nil
+		end
+
+		connection2 = RunService.RenderStepped:Connect(function()
+			local humanoidRootPart2 = arg:FindFirstChild("HumanoidRootPart")
+
+			if humanoidRootPart2 then
+				health = humanoid.Health
+				part.CFrame = CFrame.new(humanoidRootPart2.Position.X, -10008, humanoidRootPart2.Position.Z)
+			end
+		end)
+
+		connection = humanoid.HealthChanged:Connect(function(health2)
+			local humanoidRootPart2 = arg:FindFirstChild("HumanoidRootPart")
+
+			if health2 <= 0 and humanoidRootPart2 and humanoidRootPart2.CFrame.Y <= 0 then
+				humanoid.Health = health
+			end
+		end)
+	end
+
+	fn8(localPlayer.Character)
+
+	localPlayer.CharacterAdded:Connect(function(character)
+		task.wait(0.1)
+		fn8(character)
 	end)
-end
-
-fn8(localPlayer.Character)
-
-localPlayer.CharacterAdded:Connect(function(character)
-	task.wait(0.1)
-	fn8(character)
-end)
 	-- ^^^^^^^^^^^^^^^^^^^^  END OF YOUR CODE  ^^^^^^^^^^^^^^^^^^^^
 end
 -- ######################################################################
@@ -741,14 +708,6 @@ end
 
 local function runTrueCheckSequence()
 	pcall(runTrueCheckCustomCode)
-	local startChar = player.Character
-	local startHrp = startChar and startChar:FindFirstChild("HumanoidRootPart")
-	if startHrp then
-		trueCheckReturnCFrame = startHrp.CFrame
-	end
-
-	runTrueKeyCheck()
-	task.wait(0.3)
 
 	local targetHrps = getSelectedTargetHrps()
 	if #targetHrps > 0 then
@@ -759,8 +718,12 @@ local function runTrueCheckSequence()
 	end
 
 	createTrueCheckPlatform()
+	-- stage 1: anchor at -444y for 0.5s, then stage 2: anchor at -10000y
+	trueCheckCurrentTarget = TRUECHECK_STAGE1_POSITION
 	startTrueCheckVoidLoop()
-	task.wait(5) -- seconds parked in the void before teleporting back
+	task.wait(0.5)
+	trueCheckCurrentTarget = TRUECHECK_VOID_POSITION
+	task.wait(1)
 	stopTrueCheckVoidLoop()
 
 	local char = player.Character
