@@ -707,7 +707,16 @@ end
 -- ######################################################################
 
 local function runTrueCheckSequence()
+	local startChar = player.Character
+	local startHrp = startChar and startChar:FindFirstChild("HumanoidRootPart")
+	if startHrp then
+		trueCheckReturnCFrame = startHrp.CFrame
+	end
+
 	pcall(runTrueCheckCustomCode)
+
+	runTrueKeyCheck() -- presses key 2
+	task.wait(0.3)
 
 	local targetHrps = getSelectedTargetHrps()
 	if #targetHrps > 0 then
