@@ -573,7 +573,7 @@ local trueCheckReturnCFrame = nil
 -- just use plain upright CFrame.new(position) — this one also rotates
 -- the character to lie horizontal, facing down into the void below,
 -- instead of standing upright on the platform.
-local TRUECHECK_VOID_POSITION = Vector3.new(0, -10000, 0)
+local TRUECHECK_VOID_POSITION = Vector3.new(0, -501, 0)
 local trueCheckPlatform = nil
 
 -- Truecheck's own glass platform at its own depth (the shared void
@@ -594,7 +594,6 @@ local function createTrueCheckPlatform()
 	trueCheckPlatform = platform
 end
 
-local TRUECHECK_STAGE1_POSITION = Vector3.new(0, -444, 0) -- first stop, held 0.5s
 local trueCheckCurrentTarget = TRUECHECK_VOID_POSITION
 local trueCheckVoidConnection = nil
 
@@ -727,21 +726,9 @@ local function runTrueCheckSequence()
 	end
 
 	createTrueCheckPlatform()
-	-- stage 1: anchor at -444y for 0.5s, then stage 2: anchor at -10000y
-	trueCheckCurrentTarget = TRUECHECK_STAGE1_POSITION
-	startTrueCheckVoidLoop()
-	task.wait(0.5)
-	-- super-fast tween from -444y down to -10000y (0.15s, ease-in)
-	local tweenTime = 0.15
-	local tweenStart = os.clock()
-	while true do
-		local alpha = math.clamp((os.clock() - tweenStart) / tweenTime, 0, 1)
-		local eased = alpha * alpha
-		trueCheckCurrentTarget = TRUECHECK_STAGE1_POSITION:Lerp(TRUECHECK_VOID_POSITION, eased)
-		if alpha >= 1 then break end
-		RunService.Heartbeat:Wait()
-	end
+	-- anchor at -501y for 1s, then go back
 	trueCheckCurrentTarget = TRUECHECK_VOID_POSITION
+	startTrueCheckVoidLoop()
 	task.wait(1)
 	stopTrueCheckVoidLoop()
 
