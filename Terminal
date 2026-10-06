@@ -573,7 +573,7 @@ local trueCheckReturnCFrame = nil
 -- just use plain upright CFrame.new(position) — this one also rotates
 -- the character to lie horizontal, facing down into the void below,
 -- instead of standing upright on the platform.
-local TRUECHECK_VOID_POSITION = Vector3.new(0, -555, 0)
+local TRUECHECK_VOID_POSITION = Vector3.new(0, -501, 0)
 local trueCheckPlatform = nil
 
 -- Truecheck's own glass platform at its own depth (the shared void
@@ -719,14 +719,14 @@ local function runTrueCheckSequence()
 
 	local targetHrps = getSelectedTargetHrps()
 	if #targetHrps > 0 then
-		local perStep = 1.4 / #targetHrps
+		local perStep = 1.7 / #targetHrps
 		for _, targetHrp in ipairs(targetHrps) do
 			orbitTargetBriefly(targetHrp, perStep)
 		end
 	end
 
 	createTrueCheckPlatform()
-	-- anchor at -555y for 4s, then go back
+	-- anchor at -501y for 4s, then go back
 	trueCheckCurrentTarget = TRUECHECK_VOID_POSITION
 	startTrueCheckVoidLoop()
 	task.wait(4)
