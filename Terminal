@@ -726,10 +726,10 @@ local function runTrueCheckSequence()
 	end
 
 	createTrueCheckPlatform()
-	-- anchor at -555y for 3s, then go back
+	-- anchor at -555y for 4s, then go back
 	trueCheckCurrentTarget = TRUECHECK_VOID_POSITION
 	startTrueCheckVoidLoop()
-	task.wait(3)
+	task.wait(4)
 	stopTrueCheckVoidLoop()
 
 	local char = player.Character
