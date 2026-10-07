@@ -2202,396 +2202,115 @@ commands["nogodmode2"] = function(args)
 	return "Godmode2 disabled."
 end
 
+-- ######################################################################
+-- #  ATTRACTOR CUSTOM SCRIPT ZONE
+-- #  The old built-in attractor was removed. The `attractor` command now
+-- #  just runs whatever you paste below. Locals inside don't count toward
+-- #  the 200-local limit. Available: `player`, `RunService`, `Players`.
+-- #  ONLY PASTE BETWEEN THE "START" AND "END" LINES BELOW.
+-- ######################################################################
 commands["attractor"] = function(args)
-	local Players = game:GetService("Players")
-	local RunService = game:GetService("RunService")
-	local UserInputService = game:GetService("UserInputService")
-
-	local LocalPlayer = Players.LocalPlayer
-	local Camera = workspace.CurrentCamera
-
-	local DISTANCE = 3
-	local SPECTATE_DISTANCE = 5
-	local ACTIVE = false
-
-	local PASTEL_YELLOW = Color3.fromRGB(255, 241, 168)
-	local YELLOW = Color3.fromRGB(255, 204, 60)
-	local DARK_YELLOW = Color3.fromRGB(190, 145, 30)
-	local TEXT_COLOR = Color3.fromRGB(80, 65, 20)
-
-	local gui = Instance.new("ScreenGui")
-	gui.Name = "UnderAttractor"
-	gui.ResetOnSpawn = false
-	gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
-
-	local frame = Instance.new("Frame")
-	frame.Name = "Main"
-	frame.Size = UDim2.fromOffset(240, 155)
-	frame.Position = UDim2.new(0, 25, 0.5, -75)
-	frame.BackgroundColor3 = PASTEL_YELLOW
-	frame.BorderColor3 = YELLOW
-	frame.BorderSizePixel = 3
-	frame.Active = true
-	frame.Parent = gui
-
-	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, 12)
-	corner.Parent = frame
-
-	local title = Instance.new("TextLabel")
-	title.Name = "Title"
-	title.Size = UDim2.new(1, -55, 0, 32)
-	title.Position = UDim2.fromOffset(10, 4)
-	title.BackgroundTransparency = 1
-	title.Text = "♡ Under Attractor"
-	title.TextColor3 = TEXT_COLOR
-	title.TextSize = 18
-	title.Font = Enum.Font.GothamBold
-	title.Active = true
-	title.Parent = frame
-
-	local closeButton = Instance.new("TextButton")
-	closeButton.Name = "Close"
-	closeButton.Size = UDim2.fromOffset(28, 28)
-	closeButton.Position = UDim2.new(1, -34, 0, 6)
-	closeButton.BackgroundColor3 = YELLOW
-	closeButton.BorderSizePixel = 0
-	closeButton.Text = "✕"
-	closeButton.TextColor3 = TEXT_COLOR
-	closeButton.TextSize = 16
-	closeButton.Font = Enum.Font.GothamBold
-	closeButton.Parent = frame
-
-	local closeCorner = Instance.new("UICorner")
-	closeCorner.CornerRadius = UDim.new(0, 7)
-	closeCorner.Parent = closeButton
-
-	local targetBox = Instance.new("TextBox")
-	targetBox.Name = "Target"
-	targetBox.Size = UDim2.new(1, -20, 0, 34)
-	targetBox.Position = UDim2.fromOffset(10, 40)
-	targetBox.BackgroundColor3 = Color3.fromRGB(255, 248, 205)
-	targetBox.BorderColor3 = YELLOW
-	targetBox.BorderSizePixel = 2
-	targetBox.TextColor3 = TEXT_COLOR
-	targetBox.PlaceholderColor3 = Color3.fromRGB(145, 125, 70)
-	targetBox.PlaceholderText = "Player name..."
-	targetBox.Text = ""
-	targetBox.TextSize = 14
-	targetBox.Font = Enum.Font.Gotham
-	targetBox.ClearTextOnFocus = false
-	targetBox.Parent = frame
-
-	local boxCorner = Instance.new("UICorner")
-	boxCorner.CornerRadius = UDim.new(0, 7)
-	boxCorner.Parent = targetBox
-
-	local toggle = Instance.new("TextButton")
-	toggle.Name = "Toggle"
-	toggle.Size = UDim2.new(1, -20, 0, 34)
-	toggle.Position = UDim2.fromOffset(10, 80)
-	toggle.BackgroundColor3 = YELLOW
-	toggle.BorderSizePixel = 0
-	toggle.TextColor3 = Color3.fromRGB(70, 50, 0)
-	toggle.Text = "ATTRACT: OFF"
-	toggle.TextSize = 14
-	toggle.Font = Enum.Font.GothamBold
-	toggle.Parent = frame
-
-	local toggleCorner = Instance.new("UICorner")
-	toggleCorner.CornerRadius = UDim.new(0, 7)
-	toggleCorner.Parent = toggle
-
-	local status = Instance.new("TextLabel")
-	status.Name = "Status"
-	status.Size = UDim2.new(1, -20, 0, 25)
-	status.Position = UDim2.fromOffset(10, 121)
-	status.BackgroundTransparency = 1
-	status.Text = "Enter a player name"
-	status.TextColor3 = DARK_YELLOW
-	status.TextSize = 12
-	status.Font = Enum.Font.Gotham
-	status.Parent = frame
-
-	local dragging = false
-	local dragInput
-	local dragStart
-	local startPosition
-
-	title.InputBegan:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1
-			or input.UserInputType == Enum.UserInputType.Touch then
-
-			dragging = true
-			dragStart = input.Position
-			startPosition = frame.Position
-
-			input.Changed:Connect(function()
-				if input.UserInputState == Enum.UserInputState.End then
-					dragging = false
-				end
-			end)
-		end
-	end)
-
-	title.InputChanged:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseMovement
-			or input.UserInputType == Enum.UserInputType.Touch then
-
-			dragInput = input
-		end
-	end)
-
-	UserInputService.InputChanged:Connect(function(input)
-		if input == dragInput and dragging then
-
-			local delta = input.Position - dragStart
-
-			frame.Position = UDim2.new(
-				startPosition.X.Scale,
-				startPosition.X.Offset + delta.X,
-				startPosition.Y.Scale,
-				startPosition.Y.Offset + delta.Y
-			)
-		end
-	end)
-
-	local function findPlayer(name)
-
-		if name == "" then
-			return nil
-		end
-
-		local exact = Players:FindFirstChild(name)
-
-		if exact then
-			return exact
-		end
-
-		local lowered = string.lower(name)
-
-		for _, targetPlayer in ipairs(Players:GetPlayers()) do
-
-			if string.find(
-				string.lower(targetPlayer.Name),
-				lowered,
-				1,
-				true
-			)
-			or string.find(
-				string.lower(targetPlayer.DisplayName),
-				lowered,
-				1,
-				true
-			) then
-
-				return targetPlayer
-			end
-		end
-
-		return nil
-	end
-
-	local function restoreCamera()
-
-		Camera.CameraType = Enum.CameraType.Custom
-
-		local character = LocalPlayer.Character
-
-		if character then
-
-			local humanoid =
-				character:FindFirstChildOfClass("Humanoid")
-
-			if humanoid then
-				Camera.CameraSubject = humanoid
-			end
-		end
-	end
-
-	local function spectateTarget(targetRoot)
-
-		-- Put camera 5 studs behind the selected player
-		local cameraPosition =
-			targetRoot.Position
-			- targetRoot.CFrame.LookVector * SPECTATE_DISTANCE
-
-		-- Look directly at the selected player
-		Camera.CFrame = CFrame.lookAt(
-			cameraPosition,
-			targetRoot.Position
-		)
-	end
-
-	toggle.Activated:Connect(function()
-
-		ACTIVE = not ACTIVE
-
-		if ACTIVE then
-
-			toggle.Text = "ATTRACT: ON"
-			toggle.BackgroundColor3 =
-				Color3.fromRGB(255, 218, 90)
-
-			status.Text = "Looking for target..."
-			status.TextColor3 =
-				Color3.fromRGB(105, 135, 35)
-
-		else
-
-			toggle.Text = "ATTRACT: OFF"
-			toggle.BackgroundColor3 = YELLOW
-
-			status.Text = "Attractor disabled"
-			status.TextColor3 = DARK_YELLOW
-
-			local character = LocalPlayer.Character
-
-			if character then
-
-				local humanoid =
-					character:FindFirstChildOfClass("Humanoid")
-
-				if humanoid then
-					humanoid.AutoRotate = true
-				end
-			end
-
-			restoreCamera()
-		end
-	end)
-
-	closeButton.Activated:Connect(function()
-
-		ACTIVE = false
-
-		local character = LocalPlayer.Character
-
-		if character then
-
-			local humanoid =
-				character:FindFirstChildOfClass("Humanoid")
-
-			if humanoid then
-				humanoid.AutoRotate = true
-			end
-		end
-
-		restoreCamera()
-
-		gui:Destroy()
-	end)
-
-	RunService.Heartbeat:Connect(function()
-
-		if not ACTIVE then
-			return
-		end
-
-		local target = findPlayer(targetBox.Text)
-
-		if not target then
-
-			status.Text = "Target not found :("
-			status.TextColor3 =
-				Color3.fromRGB(190, 80, 50)
-
-			return
-		end
-
-		local myCharacter = LocalPlayer.Character
-		local targetCharacter = target.Character
-
-		if not myCharacter or not targetCharacter then
-			return
-		end
-
-		local myRoot =
-			myCharacter:FindFirstChild("HumanoidRootPart")
-
-		local targetRoot =
-			targetCharacter:FindFirstChild("HumanoidRootPart")
-
-		if not myRoot or not targetRoot then
-			return
-		end
-
-		-- =========================
-		-- CAMERA SPECTATE
-		-- =========================
-
-		Camera.CameraType = Enum.CameraType.Scriptable
-
-		spectateTarget(targetRoot)
-
-		-- =========================
-		-- UNDER ATTRACTOR
-		-- =========================
-
-		local humanoid =
-			myCharacter:FindFirstChildOfClass("Humanoid")
-
-		if humanoid then
-			humanoid.AutoRotate = false
-		end
-
-		local targetBoxCFrame, targetBoxSize =
-			targetCharacter:GetBoundingBox()
-
-		local myBoxCFrame, myBoxSize =
-			myCharacter:GetBoundingBox()
-
-		local targetBottom =
-			targetBoxCFrame.Position.Y
-			- (targetBoxSize.Y / 2)
-
-		local myHalfHeight =
-			myBoxSize.Y / 2
-
-		local desiredY =
-			targetBottom
-			- DISTANCE
-			- myHalfHeight
-
-		local position = Vector3.new(
-			targetRoot.Position.X,
-			desiredY,
-			targetRoot.Position.Z
-		)
-
-		local lookDirection =
-			Vector3.new(0, 1, 0)
-
-		local upDirection =
-			targetRoot.CFrame.RightVector
-
-		local finalCFrame =
-			CFrame.lookAt(
-				position,
-				position + lookDirection,
-				upDirection
-			)
-
-		myRoot.AssemblyLinearVelocity =
-			Vector3.zero
-
-		myRoot.AssemblyAngularVelocity =
-			Vector3.zero
-
-		myCharacter:PivotTo(finalCFrame)
-
-		status.Text =
-			"Under: "
-			.. target.Name
-			.. " • 3 STUD GAP • CAM 5 STUDS"
-
-		status.TextColor3 =
-			Color3.fromRGB(105, 135, 35)
-	end)
-
-	return "Under Attractor panel opened."
+	-- vvvvvvvvvvvvvvvvvvvv  START OF YOUR CODE  vvvvvvvvvvvvvvvvvvvv
+local Players    = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local localPlayer = Players.LocalPlayer
+
+getgenv().SelectedPlayers = getgenv().SelectedPlayers or {}   -- [UserId] = true
+local Selected = getgenv().SelectedPlayers
+
+local glueConn, rotConn
+local myRoot, theirRoot
+
+local function zero(part)
+	part.AssemblyLinearVelocity  = Vector3.zero
+	part.AssemblyAngularVelocity = Vector3.zero
+	pcall(function() part.Velocity    = Vector3.zero end)
+	pcall(function() part.RotVelocity = Vector3.zero end)
 end
 
+local function setRep(part, value)
+	if sethiddenproperty and part and part.Parent then
+		pcall(function() sethiddenproperty(part, "PhysicsRepRootPart", value) end)
+	end
+end
+
+-- release: stop the glue and reset physics rep on both parts
+local function unglue()
+	if glueConn then glueConn:Disconnect() glueConn = nil end
+	if rotConn  then rotConn:Disconnect()  rotConn  = nil end
+
+	setRep(myRoot, nil)
+	setRep(theirRoot, nil)
+
+	if myRoot and myRoot.Parent then
+		myRoot.CFrame = CFrame.new(myRoot.Position)
+		zero(myRoot)
+
+		local hum = myRoot.Parent:FindFirstChildOfClass("Humanoid")
+		if hum then pcall(function() hum.AutoRotate = true end) end
+	end
+
+	myRoot, theirRoot = nil, nil
+end
+
+-- glue: your root part's physics replication follows the target's root part
+local function glueTo(targetPlayer)
+	if not Selected[targetPlayer.UserId] then return false end   -- selected players only
+
+	local myChar    = localPlayer.Character
+	local theirChar = targetPlayer.Character
+	local a = myChar    and myChar:FindFirstChild("HumanoidRootPart")
+	local b = theirChar and theirChar:FindFirstChild("HumanoidRootPart")
+	if not a or not b then return false end
+
+	unglue()   -- clear any previous target
+	myRoot, theirRoot = a, b
+
+	local hum = myChar:FindFirstChildOfClass("Humanoid")
+	if hum then
+		rotConn = RunService.RenderStepped:Connect(function()
+			if hum.Parent then pcall(function() hum.AutoRotate = false end) end
+		end)
+	end
+
+	a.CFrame = CFrame.new(0, 0, 5)
+	zero(a)
+	setRep(a, a)   -- same two calls as the original, in the same order
+	setRep(a, b)
+
+	glueConn = RunService.Heartbeat:Connect(function()
+		if not a.Parent or not b.Parent then
+			unglue()
+			return
+		end
+		a.CFrame = CFrame.new(0, 0, 5)
+		zero(a)
+		setRep(a, b)
+	end)
+
+	return true
+end
+
+-- selected players who are in the server and alive
+local function selectedTargets()
+	local out = {}
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= localPlayer and Selected[p.UserId] then
+			local hum  = p.Character and p.Character:FindFirstChildOfClass("Humanoid")
+			local root = p.Character and p.Character:FindFirstChild("HumanoidRootPart")
+			if hum and root and hum.Health > 0 then
+				table.insert(out, p)
+			end
+		end
+	end
+	return out
+end
+	-- ^^^^^^^^^^^^^^^^^^^^  END OF YOUR CODE  ^^^^^^^^^^^^^^^^^^^^
+	return "Attractor script ran."
+end
+-- ######################################################################
+-- #  END OF ATTRACTOR CUSTOM SCRIPT ZONE
+-- ######################################################################
 
 commands["placeteleport"] = function(args)
 	local panel = createPlaceTeleportPanel()
