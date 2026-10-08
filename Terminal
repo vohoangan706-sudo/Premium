@@ -2788,7 +2788,7 @@ commands["antivoid"] = function(args)
 	return "Antivoid enabled."
 end
 
--- ULTRASONIC BRING: key 1 -> wait 2s -> orbit-sweep every selected
+-- ULTRASONIC BRING: key 1 -> wait 1.5s -> orbit-sweep every selected
 -- player (1s total, split evenly) -> flee to a fixed coordinate.
 -- Selection comes from the admincheck panel, same as truecheck.
 -- Key 1 goes through VirtualInputManager, which Roblox may silently
@@ -2805,7 +2805,7 @@ runUltrasonicSequence = function()
 		task.wait(0.05)
 		VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.One, false, game)
 	end)
-	task.wait(2)
+	task.wait(1.5)
 
 	local targetHrps = getSelectedTargetHrps()
 	if #targetHrps > 0 then
