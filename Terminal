@@ -46,6 +46,9 @@ end
 -- scrolling console and a command input box.
 -------------------------------------------------
 
+-- Bump this number every time something new is added to the panel.
+local PANEL_TITLE = "Aetherfinix v1.14"
+
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "TerminalPanelPremium"
 screenGui.ResetOnSpawn = false
@@ -87,7 +90,7 @@ do
 	titleLabel.Size = UDim2.new(1, -46, 1, 0)
 	titleLabel.Position = UDim2.new(0, 10, 0, 0)
 	titleLabel.BackgroundTransparency = 1
-	titleLabel.Text = "root@premium:~$"
+	titleLabel.Text = PANEL_TITLE
 	titleLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
 	titleLabel.Font = Enum.Font.Code
 	titleLabel.TextSize = 16
@@ -1042,12 +1045,14 @@ end
 -- ADMIN CHECK PANEL
 -------------------------------------------------
 
+local runUltrasonicSequence -- forward declaration, defined near the ultrasonic command below
+
 local function createAdminCheckPanel()
 	if adminCheckFrame then return adminCheckFrame end
 
 	local frame = Instance.new("Frame")
 	frame.Name = "AdminCheckPanel"
-	frame.Size = UDim2.new(0, 240, 0, 364)
+	frame.Size = UDim2.new(0, 240, 0, 340)
 	frame.Position = UDim2.new(0.5, -120, 0.2, 0)
 	frame.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
 	frame.BorderSizePixel = 0
@@ -1139,7 +1144,7 @@ local function createAdminCheckPanel()
 	countLabel.Parent = frame
 
 	local playerList = Instance.new("ScrollingFrame")
-	playerList.Size = UDim2.new(1, -16, 1, -164)
+	playerList.Size = UDim2.new(1, -16, 1, -176)
 	playerList.Position = UDim2.new(0, 8, 0, 54)
 	playerList.BackgroundColor3 = Color3.fromRGB(20, 15, 0)
 	playerList.BorderSizePixel = 0
@@ -1215,12 +1220,12 @@ local function createAdminCheckPanel()
 	-- "Check Status" runs admincheck's sequence, toggling into "Go Back"
 	-- once parked (same pattern as televoid).
 	local checkButton = Instance.new("TextButton")
-	checkButton.Size = UDim2.new(1, -16, 0, 28)
-	checkButton.Position = UDim2.new(0, 8, 1, -104)
+	checkButton.Size = UDim2.new(1, -16, 0, 24)
+	checkButton.Position = UDim2.new(0, 8, 1, -114)
 	checkButton.BackgroundColor3 = Color3.fromRGB(60, 45, 0)
 	checkButton.TextColor3 = Color3.fromRGB(255, 200, 0)
 	checkButton.Font = Enum.Font.Code
-	checkButton.TextSize = 15
+	checkButton.TextSize = 14
 	checkButton.Text = "Check Status"
 	checkButton.Parent = frame
 
@@ -1253,12 +1258,12 @@ local function createAdminCheckPanel()
 	-- "Check2" runs the same selection through check2's sequence
 	-- instead — same button style/behavior as Check Status.
 	local check2Button = Instance.new("TextButton")
-	check2Button.Size = UDim2.new(1, -16, 0, 28)
-	check2Button.Position = UDim2.new(0, 8, 1, -70)
+	check2Button.Size = UDim2.new(1, -16, 0, 24)
+	check2Button.Position = UDim2.new(0, 8, 1, -86)
 	check2Button.BackgroundColor3 = Color3.fromRGB(60, 45, 0)
 	check2Button.TextColor3 = Color3.fromRGB(255, 200, 0)
 	check2Button.Font = Enum.Font.Code
-	check2Button.TextSize = 15
+	check2Button.TextSize = 14
 	check2Button.Text = "Check2"
 	check2Button.Parent = frame
 
@@ -1283,12 +1288,12 @@ local function createAdminCheckPanel()
 	-- "TrueCheck" runs the same selection through truecheck's more
 	-- accurate sequence — same button style/behavior as the other two.
 	local trueCheckButton = Instance.new("TextButton")
-	trueCheckButton.Size = UDim2.new(1, -16, 0, 28)
-	trueCheckButton.Position = UDim2.new(0, 8, 1, -36)
+	trueCheckButton.Size = UDim2.new(1, -16, 0, 24)
+	trueCheckButton.Position = UDim2.new(0, 8, 1, -58)
 	trueCheckButton.BackgroundColor3 = Color3.fromRGB(60, 45, 0)
 	trueCheckButton.TextColor3 = Color3.fromRGB(255, 200, 0)
 	trueCheckButton.Font = Enum.Font.Code
-	trueCheckButton.TextSize = 15
+	trueCheckButton.TextSize = 14
 	trueCheckButton.Text = "TrueCheck"
 	trueCheckButton.Parent = frame
 
@@ -1307,6 +1312,34 @@ local function createAdminCheckPanel()
 		task.spawn(function()
 			runTrueCheckSequence()
 			trueCheckButton.Text = "TrueCheck"
+		end)
+	end)
+
+	local ultrasonicButton = Instance.new("TextButton")
+	ultrasonicButton.Size = UDim2.new(1, -16, 0, 24)
+	ultrasonicButton.Position = UDim2.new(0, 8, 1, -30)
+	ultrasonicButton.BackgroundColor3 = Color3.fromRGB(60, 45, 0)
+	ultrasonicButton.TextColor3 = Color3.fromRGB(255, 200, 0)
+	ultrasonicButton.Font = Enum.Font.Code
+	ultrasonicButton.TextSize = 14
+	ultrasonicButton.Text = "Ultrasonic Bring"
+	ultrasonicButton.Parent = frame
+
+	local ultrasonicButtonCorner = Instance.new("UICorner")
+	ultrasonicButtonCorner.CornerRadius = UDim.new(0, 4)
+	ultrasonicButtonCorner.Parent = ultrasonicButton
+
+	ultrasonicButton.MouseButton1Click:Connect(function()
+		if #selectedCheckPlayers == 0 then
+			local original = ultrasonicButton.Text
+			ultrasonicButton.Text = "select a player first"
+			task.delay(1.2, function() ultrasonicButton.Text = original end)
+			return
+		end
+		ultrasonicButton.Text = "running..."
+		task.spawn(function()
+			runUltrasonicSequence()
+			ultrasonicButton.Text = "Ultrasonic Bring"
 		end)
 	end)
 
@@ -2209,196 +2242,21 @@ end
 -- #  targetBox, toggle, status, ACTIVE, DISTANCE, findPlayer, LocalPlayer.
 -- #  (ACTIVE flips when the toggle is clicked. No camera / old attract loop.)
 -- ######################################################################
+-- ######################################################################
+-- #  ATTRACTOR CUSTOM CODE ZONE
+-- #  The old built-in attractor was removed. Whatever you paste between
+-- #  the "START" and "END" lines below runs when you type `attractor`.
+-- #  Locals in here don't count toward the 200-local limit.
+-- #  Whatever string you `return` is printed in the terminal.
+-- ######################################################################
 commands["attractor"] = function(args)
-	local UserInputService = game:GetService("UserInputService")
-
-	local LocalPlayer = Players.LocalPlayer
-	local ACTIVE = false
-	local DISTANCE = 3
-
-	local PASTEL_YELLOW = Color3.fromRGB(255, 241, 168)
-	local YELLOW = Color3.fromRGB(255, 204, 60)
-	local DARK_YELLOW = Color3.fromRGB(190, 145, 30)
-	local TEXT_COLOR = Color3.fromRGB(80, 65, 20)
-
-	local gui = Instance.new("ScreenGui")
-	gui.Name = "UnderAttractor"
-	gui.ResetOnSpawn = false
-	gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
-
-	local frame = Instance.new("Frame")
-	frame.Name = "Main"
-	frame.Size = UDim2.fromOffset(240, 155)
-	frame.Position = UDim2.new(0, 25, 0.5, -75)
-	frame.BackgroundColor3 = PASTEL_YELLOW
-	frame.BorderColor3 = YELLOW
-	frame.BorderSizePixel = 3
-	frame.Active = true
-	frame.Parent = gui
-
-	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, 12)
-	corner.Parent = frame
-
-	local title = Instance.new("TextLabel")
-	title.Name = "Title"
-	title.Size = UDim2.new(1, -55, 0, 32)
-	title.Position = UDim2.fromOffset(10, 4)
-	title.BackgroundTransparency = 1
-	title.Text = "♡ Under Attractor"
-	title.TextColor3 = TEXT_COLOR
-	title.TextSize = 18
-	title.Font = Enum.Font.GothamBold
-	title.Active = true
-	title.Parent = frame
-
-	local closeButton = Instance.new("TextButton")
-	closeButton.Name = "Close"
-	closeButton.Size = UDim2.fromOffset(28, 28)
-	closeButton.Position = UDim2.new(1, -34, 0, 6)
-	closeButton.BackgroundColor3 = YELLOW
-	closeButton.BorderSizePixel = 0
-	closeButton.Text = "✕"
-	closeButton.TextColor3 = TEXT_COLOR
-	closeButton.TextSize = 16
-	closeButton.Font = Enum.Font.GothamBold
-	closeButton.Parent = frame
-
-	local closeCorner = Instance.new("UICorner")
-	closeCorner.CornerRadius = UDim.new(0, 7)
-	closeCorner.Parent = closeButton
-
-	local targetBox = Instance.new("TextBox")
-	targetBox.Name = "Target"
-	targetBox.Size = UDim2.new(1, -20, 0, 34)
-	targetBox.Position = UDim2.fromOffset(10, 40)
-	targetBox.BackgroundColor3 = Color3.fromRGB(255, 248, 205)
-	targetBox.BorderColor3 = YELLOW
-	targetBox.BorderSizePixel = 2
-	targetBox.TextColor3 = TEXT_COLOR
-	targetBox.PlaceholderColor3 = Color3.fromRGB(145, 125, 70)
-	targetBox.PlaceholderText = "Player name..."
-	targetBox.Text = ""
-	targetBox.TextSize = 14
-	targetBox.Font = Enum.Font.Gotham
-	targetBox.ClearTextOnFocus = false
-	targetBox.Parent = frame
-
-	local boxCorner = Instance.new("UICorner")
-	boxCorner.CornerRadius = UDim.new(0, 7)
-	boxCorner.Parent = targetBox
-
-	local toggle = Instance.new("TextButton")
-	toggle.Name = "Toggle"
-	toggle.Size = UDim2.new(1, -20, 0, 34)
-	toggle.Position = UDim2.fromOffset(10, 80)
-	toggle.BackgroundColor3 = YELLOW
-	toggle.BorderSizePixel = 0
-	toggle.TextColor3 = Color3.fromRGB(70, 50, 0)
-	toggle.Text = "ATTRACT: OFF"
-	toggle.TextSize = 14
-	toggle.Font = Enum.Font.GothamBold
-	toggle.Parent = frame
-
-	local toggleCorner = Instance.new("UICorner")
-	toggleCorner.CornerRadius = UDim.new(0, 7)
-	toggleCorner.Parent = toggle
-
-	local status = Instance.new("TextLabel")
-	status.Name = "Status"
-	status.Size = UDim2.new(1, -20, 0, 25)
-	status.Position = UDim2.fromOffset(10, 121)
-	status.BackgroundTransparency = 1
-	status.Text = "Enter a player name"
-	status.TextColor3 = DARK_YELLOW
-	status.TextSize = 12
-	status.Font = Enum.Font.Gotham
-	status.Parent = frame
-
-	-- drag the panel by its title
-	local dragging = false
-	local dragInput
-	local dragStart
-	local startPosition
-
-	title.InputBegan:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1
-			or input.UserInputType == Enum.UserInputType.Touch then
-			dragging = true
-			dragStart = input.Position
-			startPosition = frame.Position
-			input.Changed:Connect(function()
-				if input.UserInputState == Enum.UserInputState.End then
-					dragging = false
-				end
-			end)
-		end
-	end)
-
-	title.InputChanged:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseMovement
-			or input.UserInputType == Enum.UserInputType.Touch then
-			dragInput = input
-		end
-	end)
-
-	UserInputService.InputChanged:Connect(function(input)
-		if input == dragInput and dragging then
-			local delta = input.Position - dragStart
-			frame.Position = UDim2.new(
-				startPosition.X.Scale,
-				startPosition.X.Offset + delta.X,
-				startPosition.Y.Scale,
-				startPosition.Y.Offset + delta.Y
-			)
-		end
-	end)
-
-	local function findPlayer(name)
-		if name == "" then
-			return nil
-		end
-		local exact = Players:FindFirstChild(name)
-		if exact then
-			return exact
-		end
-		local lowered = string.lower(name)
-		for _, plr in ipairs(Players:GetPlayers()) do
-			if string.find(string.lower(plr.Name), lowered, 1, true)
-				or string.find(string.lower(plr.DisplayName), lowered, 1, true) then
-				return plr
-			end
-		end
-		return nil
-	end
-
-	-- toggle flips ACTIVE and the status text; your code reacts to ACTIVE
-	toggle.Activated:Connect(function()
-		ACTIVE = not ACTIVE
-		if ACTIVE then
-			toggle.Text = "ATTRACT: ON"
-			toggle.BackgroundColor3 = Color3.fromRGB(255, 218, 90)
-			status.Text = "Looking for target..."
-			status.TextColor3 = Color3.fromRGB(105, 135, 35)
-		else
-			toggle.Text = "ATTRACT: OFF"
-			toggle.BackgroundColor3 = YELLOW
-			status.Text = "Attractor disabled"
-			status.TextColor3 = DARK_YELLOW
-		end
-	end)
-
-	closeButton.Activated:Connect(function()
-		ACTIVE = false
-		gui:Destroy()
-	end)
-
-	-- (old built-in attract/spectate loop removed — your code below drives the panel)
-
-	-- ##################################################################
-	-- #  YOUR CODE ZONE — ONLY PASTE BETWEEN THE "START" AND "END" LINES
-	-- ##################################################################
 	-- vvvvvvvvvvvvvvvvvvvv  START OF YOUR CODE  vvvvvvvvvvvvvvvvvvvv
+-- Glue test panel: type a name, press Glue, it stays glued until you press Stop.
+-- Survives respawns (yours or the target's), waits if the target leaves and
+-- resumes if they rejoin. Safe to re-run: it removes its previous copy first.
+
+if getgenv().GlueStop then pcall(getgenv().GlueStop) end
+
 local Players    = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local localPlayer = Players.LocalPlayer
@@ -2406,9 +2264,9 @@ local localPlayer = Players.LocalPlayer
 getgenv().SelectedPlayers = getgenv().SelectedPlayers or {}   -- [UserId] = true
 local Selected = getgenv().SelectedPlayers
 
-local glueConn, rotConn
-local myRoot, theirRoot
-
+------------------------------------------------------------------
+-- glue core
+------------------------------------------------------------------
 local function zero(part)
 	part.AssemblyLinearVelocity  = Vector3.zero
 	part.AssemblyAngularVelocity = Vector3.zero
@@ -2422,39 +2280,42 @@ local function setRep(part, value)
 	end
 end
 
--- release: stop the glue and reset physics rep on both parts
-local function unglue()
-	if glueConn then glueConn:Disconnect() glueConn = nil end
-	if rotConn  then rotConn:Disconnect()  rotConn  = nil end
+local active = false
+local targetId, targetName = nil, ""
+local attachedMy, attachedTheir
+local heartbeatConn, rotConn
+local lastState
+local onState = function() end
 
-	setRep(myRoot, nil)
-	setRep(theirRoot, nil)
+local function setState(s)
+	if s ~= lastState then
+		lastState = s
+		onState(s)
+	end
+end
 
-	if myRoot and myRoot.Parent then
-		myRoot.CFrame = CFrame.new(myRoot.Position)
-		zero(myRoot)
+-- detach the physics link only (does not end the session)
+local function release()
+	if rotConn then rotConn:Disconnect() rotConn = nil end
 
-		local hum = myRoot.Parent:FindFirstChildOfClass("Humanoid")
+	setRep(attachedMy, nil)
+	setRep(attachedTheir, nil)
+
+	if attachedMy and attachedMy.Parent then
+		attachedMy.CFrame = CFrame.new(attachedMy.Position)
+		zero(attachedMy)
+		local hum = attachedMy.Parent:FindFirstChildOfClass("Humanoid")
 		if hum then pcall(function() hum.AutoRotate = true end) end
 	end
 
-	myRoot, theirRoot = nil, nil
+	attachedMy, attachedTheir = nil, nil
 end
 
--- glue: your root part's physics replication follows the target's root part
-local function glueTo(targetPlayer)
-	if not Selected[targetPlayer.UserId] then return false end   -- selected players only
+-- link your root part to the target's root part
+local function attach(a, b, hum)
+	release()
+	attachedMy, attachedTheir = a, b
 
-	local myChar    = localPlayer.Character
-	local theirChar = targetPlayer.Character
-	local a = myChar    and myChar:FindFirstChild("HumanoidRootPart")
-	local b = theirChar and theirChar:FindFirstChild("HumanoidRootPart")
-	if not a or not b then return false end
-
-	unglue()   -- clear any previous target
-	myRoot, theirRoot = a, b
-
-	local hum = myChar:FindFirstChildOfClass("Humanoid")
 	if hum then
 		rotConn = RunService.RenderStepped:Connect(function()
 			if hum.Parent then pcall(function() hum.AutoRotate = false end) end
@@ -2463,42 +2324,346 @@ local function glueTo(targetPlayer)
 
 	a.CFrame = CFrame.new(0, 0, 5)
 	zero(a)
-	setRep(a, a)   -- same two calls as the original, in the same order
+	setRep(a, a)
 	setRep(a, b)
+end
 
-	glueConn = RunService.Heartbeat:Connect(function()
-		if not a.Parent or not b.Parent then
-			unglue()
+-- end the session completely (this is what the Stop button does)
+local function stop()
+	active = false
+	targetId = nil
+	if heartbeatConn then heartbeatConn:Disconnect() heartbeatConn = nil end
+	release()
+	lastState = nil
+end
+
+-- start gluing to one player and keep going until stop()
+local function start(player)
+	if not Selected[player.UserId] then return false end   -- selected players only
+
+	stop()
+	targetId = player.UserId
+	targetName = player.DisplayName .. " (@" .. player.Name .. ")"
+	active = true
+
+	heartbeatConn = RunService.Heartbeat:Connect(function()
+		if not active then return end
+
+		local target = Players:GetPlayerByUserId(targetId)
+		if not target then
+			if attachedMy then release() end
+			setState("Waiting for " .. targetName .. " to rejoin...")
 			return
 		end
-		a.CFrame = CFrame.new(0, 0, 5)
-		zero(a)
-		setRep(a, b)
+
+		local myChar    = localPlayer.Character
+		local theirChar = target.Character
+		local a   = myChar    and myChar:FindFirstChild("HumanoidRootPart")
+		local b   = theirChar and theirChar:FindFirstChild("HumanoidRootPart")
+		local hum = myChar    and myChar:FindFirstChildOfClass("Humanoid")
+
+		if not a then
+			if attachedMy then release() end
+			setState("Waiting for your character...")
+			return
+		end
+
+		if not b then
+			if attachedMy then release() end
+			setState("Waiting for " .. targetName .. " to respawn...")
+			return
+		end
+
+		if a ~= attachedMy or b ~= attachedTheir then
+			attach(a, b, hum)          -- first attach, or either of you respawned
+		else
+			a.CFrame = CFrame.new(0, 0, 5)
+			zero(a)
+			setRep(a, b)
+		end
+
+		setState("Glued to " .. targetName)
 	end)
 
 	return true
 end
 
--- selected players who are in the server and alive
-local function selectedTargets()
-	local out = {}
-	for _, p in ipairs(Players:GetPlayers()) do
-		if p ~= localPlayer and Selected[p.UserId] then
-			local hum  = p.Character and p.Character:FindFirstChildOfClass("Humanoid")
-			local root = p.Character and p.Character:FindFirstChild("HumanoidRootPart")
-			if hum and root and hum.Health > 0 then
-				table.insert(out, p)
+------------------------------------------------------------------
+-- name lookup: exact -> starts with -> contains (username or display name)
+------------------------------------------------------------------
+local function findPlayer(text)
+	text = text:match("^%s*(.-)%s*$"):lower()
+	if text == "" then return nil end
+
+	local function search(test)
+		for _, p in ipairs(Players:GetPlayers()) do
+			if p ~= localPlayer then
+				if test(p.Name:lower()) or test(p.DisplayName:lower()) then
+					return p
+				end
 			end
 		end
 	end
-	return out
-end
-	-- ^^^^^^^^^^^^^^^^^^^^  END OF YOUR CODE  ^^^^^^^^^^^^^^^^^^^^
 
-	return "Under Attractor panel opened."
+	return search(function(n) return n == text end)
+		or search(function(n) return n:sub(1, #text) == text end)
+		or search(function(n) return n:find(text, 1, true) ~= nil end)
+end
+
+------------------------------------------------------------------
+-- invisible (taken from the original script)
+-- every Heartbeat it plays a frozen animation (71181015443030 at 13.45s,
+-- huge weight) and stops it again in RenderStepped; your own body shows at 50%
+------------------------------------------------------------------
+local invisOn   = false
+local invisBusy = false
+local invisTrack
+local invisBeat, invisCharConn
+local dimConns = {}
+
+local function dimPart(part)
+	if not part:IsA("BasePart") then return end
+	if part.Name == "HumanoidRootPart" then return end
+	if part.Transparency == 1 then return end
+	if part.Name:lower():find("hitbox") then return end
+
+	part.LocalTransparencyModifier = 0.5
+	table.insert(dimConns, part:GetPropertyChangedSignal("LocalTransparencyModifier"):Connect(function()
+		if invisOn and part.LocalTransparencyModifier ~= 0.5 then
+			part.LocalTransparencyModifier = 0.5
+		end
+	end))
+end
+
+local function dimCharacter(char)
+	for _, d in ipairs(char:GetDescendants()) do
+		dimPart(d)
+	end
+
+	table.insert(dimConns, char.DescendantAdded:Connect(function(d)
+		if invisOn then dimPart(d) end
+	end))
+end
+
+local function stopInvisTrack()
+	if invisTrack then
+		pcall(function()
+			if invisTrack.IsPlaying then invisTrack:Stop() end
+			invisTrack:Destroy()
+		end)
+		invisTrack = nil
+	end
+end
+
+local function invisStep()
+	if not invisOn or invisBusy then return end
+
+	local char = localPlayer.Character
+	local hum  = char and char:FindFirstChildOfClass("Humanoid")
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	local animator = hum and hum:FindFirstChildOfClass("Animator")
+	if not hum or not root or not animator then return end
+	if hum.Health <= 0 then return end
+
+	invisBusy = true
+
+	pcall(function()
+		local velocity = root.Velocity
+
+		local anim = Instance.new("Animation")
+		anim.AnimationId = "rbxassetid://71181015443030"
+		invisTrack = animator:LoadAnimation(anim)
+		invisTrack.Priority = Enum.AnimationPriority.Action4
+		invisTrack:Play()
+		invisTrack:AdjustSpeed(0)
+		invisTrack:AdjustWeight(2e9)
+		invisTrack.TimePosition = 13.45
+
+		RunService.RenderStepped:Wait()
+
+		stopInvisTrack()
+		root.Velocity = velocity
+	end)
+
+	invisBusy = false
+end
+
+local function setInvisible(on)
+	if on == invisOn then return end
+	invisOn = on
+
+	if on then
+		if localPlayer.Character then dimCharacter(localPlayer.Character) end
+
+		invisCharConn = localPlayer.CharacterAdded:Connect(function(char)
+			task.wait(0.1)
+			if invisOn then dimCharacter(char) end
+		end)
+
+		invisBeat = RunService.Heartbeat:Connect(invisStep)
+	else
+		if invisBeat then invisBeat:Disconnect() invisBeat = nil end
+		if invisCharConn then invisCharConn:Disconnect() invisCharConn = nil end
+
+		for _, c in ipairs(dimConns) do
+			pcall(function() c:Disconnect() end)
+		end
+		dimConns = {}
+
+		stopInvisTrack()
+
+		local char = localPlayer.Character
+		if char then
+			for _, d in ipairs(char:GetDescendants()) do
+				if d:IsA("BasePart") and d.Name ~= "HumanoidRootPart" then
+					d.LocalTransparencyModifier = 0
+				end
+			end
+		end
+	end
+end
+
+------------------------------------------------------------------
+-- panel
+------------------------------------------------------------------
+local gui = Instance.new("ScreenGui")
+gui.Name = "GlueTestUI"
+gui.ResetOnSpawn = false
+gui.DisplayOrder = 999
+local ok = pcall(function() gui.Parent = game.CoreGui end)
+if not ok or not gui.Parent then
+	gui.Parent = localPlayer:WaitForChild("PlayerGui")
+end
+
+local function round(obj, r)
+	Instance.new("UICorner", obj).CornerRadius = UDim.new(0, r)
+end
+
+local main = Instance.new("Frame")
+main.Size = UDim2.new(0, 250, 0, 196)
+main.Position = UDim2.new(0.5, -125, 0.5, -98)
+main.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
+main.BorderSizePixel = 0
+main.Active = true
+main.Draggable = true
+main.Parent = gui
+round(main, 12)
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, -16, 0, 22)
+title.Position = UDim2.new(0, 8, 0, 6)
+title.BackgroundTransparency = 1
+title.Font = Enum.Font.GothamBold
+title.TextSize = 14
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Text = "Glue + Invisible"
+title.Parent = main
+
+local box = Instance.new("TextBox")
+box.Size = UDim2.new(1, -16, 0, 28)
+box.Position = UDim2.new(0, 8, 0, 34)
+box.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
+box.BorderSizePixel = 0
+box.Font = Enum.Font.Gotham
+box.TextSize = 13
+box.PlaceholderText = "Player name..."
+box.Text = ""
+box.TextColor3 = Color3.fromRGB(235, 235, 240)
+box.ClearTextOnFocus = false
+box.Parent = main
+round(box, 8)
+
+local function mkButton(text, x, w, color)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.new(w, -12, 0, 30)
+	b.Position = UDim2.new(x, 8, 0, 70)
+	b.BackgroundColor3 = color
+	b.BorderSizePixel = 0
+	b.Font = Enum.Font.GothamBold
+	b.TextSize = 12
+	b.TextColor3 = Color3.fromRGB(255, 255, 255)
+	b.Text = text
+	b.AutoButtonColor = true
+	b.Parent = main
+	round(b, 8)
+	return b
+end
+
+local glueBtn = mkButton("Glue", 0,   0.5, Color3.fromRGB(50, 170, 110))
+local stopBtn = mkButton("Stop", 0.5, 0.5, Color3.fromRGB(200, 70, 80))
+
+local INVIS_OFF = Color3.fromRGB(40, 40, 52)
+local INVIS_ON  = Color3.fromRGB(110, 90, 220)
+
+local invisBtn = Instance.new("TextButton")
+invisBtn.Size = UDim2.new(1, -16, 0, 28)
+invisBtn.Position = UDim2.new(0, 8, 0, 106)
+invisBtn.BackgroundColor3 = INVIS_OFF
+invisBtn.BorderSizePixel = 0
+invisBtn.Font = Enum.Font.GothamBold
+invisBtn.TextSize = 12
+invisBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+invisBtn.Text = "Invisible: OFF"
+invisBtn.AutoButtonColor = true
+invisBtn.Parent = main
+round(invisBtn, 8)
+
+local status = Instance.new("TextLabel")
+status.Size = UDim2.new(1, -16, 0, 48)
+status.Position = UDim2.new(0, 8, 0, 142)
+status.BackgroundTransparency = 1
+status.Font = Enum.Font.Gotham
+status.TextSize = 11
+status.TextWrapped = true
+status.TextColor3 = Color3.fromRGB(170, 170, 180)
+status.TextXAlignment = Enum.TextXAlignment.Left
+status.TextYAlignment = Enum.TextYAlignment.Top
+status.Parent = main
+
+local function setStatus(text)
+	status.Text = text
+end
+
+onState = setStatus
+
+setStatus(sethiddenproperty and "sethiddenproperty: OK" or "sethiddenproperty: MISSING (glue won't attach)")
+
+glueBtn.MouseButton1Click:Connect(function()
+	local p = findPlayer(box.Text)
+	if not p then
+		setStatus("No player found for \"" .. box.Text .. "\"")
+		return
+	end
+
+	for k in pairs(Selected) do Selected[k] = nil end   -- one target at a time
+	Selected[p.UserId] = true
+
+	start(p)   -- runs until Stop is pressed
+end)
+
+stopBtn.MouseButton1Click:Connect(function()
+	stop()
+	setStatus("Stopped")
+end)
+
+invisBtn.MouseButton1Click:Connect(function()
+	setInvisible(not invisOn)
+	invisBtn.Text = invisOn and "Invisible: ON" or "Invisible: OFF"
+	invisBtn.BackgroundColor3 = invisOn and INVIS_ON or INVIS_OFF
+end)
+
+getgenv().GlueStop = function()
+	stop()
+	setInvisible(false)
+	gui:Destroy()
+end
+
+	-- ^^^^^^^^^^^^^^^^^^^^  END OF YOUR CODE  ^^^^^^^^^^^^^^^^^^^^
+	return "Attractor ran."
 end
 -- ######################################################################
--- #  END OF ATTRACTOR
+-- #  END OF ATTRACTOR CUSTOM CODE ZONE
 -- ######################################################################
 
 commands["placeteleport"] = function(args)
@@ -2623,6 +2788,62 @@ commands["antivoid"] = function(args)
 	return "Antivoid enabled."
 end
 
+-- ULTRASONIC BRING: key 1 -> wait 2s -> orbit-sweep every selected
+-- player (1s total, split evenly) -> flee to a fixed coordinate.
+-- Selection comes from the admincheck panel, same as truecheck.
+-- Key 1 goes through VirtualInputManager, which Roblox may silently
+-- block outside Studio (same caveat as the key 2 / key 3 checks).
+local ULTRASONIC_FLEE_POSITION = Vector3.new(-4.9, 1468.7, 25383.5)
+local ultrasonicRunning = false
+
+runUltrasonicSequence = function()
+	if ultrasonicRunning then return end
+	ultrasonicRunning = true
+
+	pcall(function()
+		VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.One, false, game)
+		task.wait(0.05)
+		VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.One, false, game)
+	end)
+	task.wait(2)
+
+	local targetHrps = getSelectedTargetHrps()
+	if #targetHrps > 0 then
+		local perStep = 1 / #targetHrps -- exactly 1s total
+		for _, targetHrp in ipairs(targetHrps) do
+			orbitTargetBriefly(targetHrp, perStep)
+		end
+	end
+
+	local char = player.Character
+	if char then
+		teleportFullBody(char, CFrame.new(ULTRASONIC_FLEE_POSITION))
+	end
+
+	ultrasonicRunning = false
+end
+
+local function ultrasonicBringCommand()
+	if #selectedCheckPlayers == 0 then
+		return "No players selected — open the admin check panel first and select someone."
+	end
+	if ultrasonicRunning then
+		return "Ultrasonic bring is already running."
+	end
+	task.spawn(runUltrasonicSequence)
+	return "Running ultrasonic bring on " .. #selectedCheckPlayers .. " selected player(s)."
+end
+
+commands["ultrasonicbring"] = ultrasonicBringCommand
+
+-- also accept it typed with a space: "ultrasonic bring"
+commands["ultrasonic"] = function(args)
+	if args[1] and args[1]:lower() == "bring" then
+		return ultrasonicBringCommand()
+	end
+	return "Usage: ultrasonic bring  (or ultrasonicbring)"
+end
+
 commands["help"] = function(args)
 	local names = {}
 	for name in pairs(commands) do
@@ -2698,4 +2919,4 @@ inputBox.FocusLost:Connect(function(enterPressed)
 	inputBox:CaptureFocus()
 end)
 
-addLine("Terminalpanel Premium ready. Type 'help' for a list of commands.", Color3.fromRGB(255, 220, 120))
+addLine(PANEL_TITLE .. " ready. Type 'help' for a list of commands.", Color3.fromRGB(255, 220, 120))
