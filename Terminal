@@ -1053,7 +1053,7 @@ local function createAdminCheckPanel()
 	titleLabel.Size = UDim2.new(1, -34, 0, 24)
 	titleLabel.Position = UDim2.new(0, 8, 0, 6)
 	titleLabel.BackgroundTransparency = 1
-	titleLabel.Text = "Child emperor void"
+	titleLabel.Text = "Void kill"
 	titleLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
 	titleLabel.Font = Enum.Font.Code
 	titleLabel.TextSize = 16
@@ -1207,7 +1207,7 @@ local function createAdminCheckPanel()
 	checkButton.TextColor3 = Color3.fromRGB(255, 200, 0)
 	checkButton.Font = Enum.Font.Code
 	checkButton.TextSize = 14
-	checkButton.Text = "Check Status"
+	checkButton.Text = "Child emperor void "
 	checkButton.Parent = frame
 
 	local checkButtonCorner = Instance.new("UICorner")
@@ -1217,7 +1217,7 @@ local function createAdminCheckPanel()
 	checkButton.MouseButton1Click:Connect(function()
 		if adminCheckParked() then
 			returnFromAdminCheck()
-			checkButton.Text = "Check Status"
+			checkButton.Text = "Child emperor void"
 			checkButton.BackgroundColor3 = Color3.fromRGB(60, 45, 0)
 			return
 		end
@@ -1245,7 +1245,7 @@ local function createAdminCheckPanel()
 	check2Button.TextColor3 = Color3.fromRGB(255, 200, 0)
 	check2Button.Font = Enum.Font.Code
 	check2Button.TextSize = 14
-	check2Button.Text = "Check2"
+	check2Button.Text = "fast child void"
 	check2Button.Parent = frame
 
 	local check2ButtonCorner = Instance.new("UICorner")
@@ -1262,7 +1262,7 @@ local function createAdminCheckPanel()
 		check2Button.Text = "checking..."
 		task.spawn(function()
 			runCheck2Sequence()
-			check2Button.Text = "Check2"
+			check2Button.Text = fast child void"
 		end)
 	end)
 
@@ -1275,7 +1275,7 @@ local function createAdminCheckPanel()
 	trueCheckButton.TextColor3 = Color3.fromRGB(255, 200, 0)
 	trueCheckButton.Font = Enum.Font.Code
 	trueCheckButton.TextSize = 14
-	trueCheckButton.Text = "TrueCheck"
+	trueCheckButton.Text = "Suiryu void"
 	trueCheckButton.Parent = frame
 
 	local trueCheckButtonCorner = Instance.new("UICorner")
@@ -1292,7 +1292,7 @@ local function createAdminCheckPanel()
 		trueCheckButton.Text = "checking..."
 		task.spawn(function()
 			runTrueCheckSequence()
-			trueCheckButton.Text = "TrueCheck"
+			trueCheckButton.Text = "suiryu void"
 		end)
 	end)
 
