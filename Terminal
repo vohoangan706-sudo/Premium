@@ -1262,7 +1262,7 @@ local function createAdminCheckPanel()
 		check2Button.Text = "checking..."
 		task.spawn(function()
 			runCheck2Sequence()
-			check2Button.Text = fast child void"
+			check2Button.Text = "fast child void"
 		end)
 	end)
 
