@@ -1,3 +1,22 @@
+--[[
+    Terminalpanel Premium
+    ------------------------------------------------------------
+    Place this as a second LocalScript inside StarterPlayerScripts,
+    alongside the main TerminalPanel script.
+
+    This is a fully separate script on purpose: it has its own
+    Luau 200-local-variable budget, independent of the main
+    TerminalPanel script. All the admin-exclusive tools that used
+    to live inside TerminalPanel (admincheck, check2, godmode) have
+    been moved here so the main script has headroom again.
+
+    If the local player's UserId isn't in ADMIN_USER_IDS below, this
+    entire script does nothing at all — no UI is created, nothing is
+    visible, nothing is discoverable. That's stronger hiding than
+    per-command checks can offer, since there's no shared panel for
+    a non-admin to even probe with command names.
+--]]
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -1053,7 +1072,7 @@ local function createAdminCheckPanel()
 	titleLabel.Size = UDim2.new(1, -34, 0, 24)
 	titleLabel.Position = UDim2.new(0, 8, 0, 6)
 	titleLabel.BackgroundTransparency = 1
-	titleLabel.Text = "Void kill"
+	titleLabel.Text = "Admin Check"
 	titleLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
 	titleLabel.Font = Enum.Font.Code
 	titleLabel.TextSize = 16
@@ -1207,7 +1226,7 @@ local function createAdminCheckPanel()
 	checkButton.TextColor3 = Color3.fromRGB(255, 200, 0)
 	checkButton.Font = Enum.Font.Code
 	checkButton.TextSize = 14
-	checkButton.Text = "Child emperor void "
+	checkButton.Text = "Child Emperor Void"
 	checkButton.Parent = frame
 
 	local checkButtonCorner = Instance.new("UICorner")
@@ -1217,7 +1236,7 @@ local function createAdminCheckPanel()
 	checkButton.MouseButton1Click:Connect(function()
 		if adminCheckParked() then
 			returnFromAdminCheck()
-			checkButton.Text = "Child emperor void"
+			checkButton.Text = "Child Emperor Void"
 			checkButton.BackgroundColor3 = Color3.fromRGB(60, 45, 0)
 			return
 		end
@@ -1245,7 +1264,7 @@ local function createAdminCheckPanel()
 	check2Button.TextColor3 = Color3.fromRGB(255, 200, 0)
 	check2Button.Font = Enum.Font.Code
 	check2Button.TextSize = 14
-	check2Button.Text = "fast child void"
+	check2Button.Text = "Fast Child Void"
 	check2Button.Parent = frame
 
 	local check2ButtonCorner = Instance.new("UICorner")
@@ -1262,7 +1281,7 @@ local function createAdminCheckPanel()
 		check2Button.Text = "checking..."
 		task.spawn(function()
 			runCheck2Sequence()
-			check2Button.Text = "fast child void"
+			check2Button.Text = "Fast Child Void"
 		end)
 	end)
 
@@ -1275,7 +1294,7 @@ local function createAdminCheckPanel()
 	trueCheckButton.TextColor3 = Color3.fromRGB(255, 200, 0)
 	trueCheckButton.Font = Enum.Font.Code
 	trueCheckButton.TextSize = 14
-	trueCheckButton.Text = "Suiryu void"
+	trueCheckButton.Text = "Suiryu Void"
 	trueCheckButton.Parent = frame
 
 	local trueCheckButtonCorner = Instance.new("UICorner")
@@ -1292,7 +1311,7 @@ local function createAdminCheckPanel()
 		trueCheckButton.Text = "checking..."
 		task.spawn(function()
 			runTrueCheckSequence()
-			trueCheckButton.Text = "suiryu void"
+			trueCheckButton.Text = "Suiryu Void"
 		end)
 	end)
 
@@ -2232,7 +2251,8 @@ end
 -- ######################################################################
 commands["attractor"] = function(args)
 	-- vvvvvvvvvvvvvvvvvvvv  START OF YOUR CODE  vvvvvvvvvvvvvvvvvvvv
--- Glue test panel: type a name, press Glue, it stays glued until you press Stop.
+-- Glue panel (black + gold): type a name, press Glue, it stays glued until you press Stop.
+-- The camera follows the glued player (Spectate toggle); Stop puts it back on you.
 -- Survives respawns (yours or the target's), waits if the target leaves and
 -- resumes if they rejoin. Safe to re-run: it removes its previous copy first.
 
@@ -2267,6 +2287,7 @@ local attachedMy, attachedTheir
 local heartbeatConn, rotConn
 local lastState
 local onState = function() end
+local spectateOn = true   -- camera follows the glued player
 
 local function setState(s)
 	if s ~= lastState then
@@ -2309,12 +2330,23 @@ local function attach(a, b, hum)
 	setRep(a, b)
 end
 
+-- put the camera back on your own character
+local function restoreCamera()
+	local cam = workspace.CurrentCamera
+	local char = localPlayer.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if cam and hum then
+		cam.CameraSubject = hum
+	end
+end
+
 -- end the session completely (this is what the Stop button does)
 local function stop()
 	active = false
 	targetId = nil
 	if heartbeatConn then heartbeatConn:Disconnect() heartbeatConn = nil end
 	release()
+	restoreCamera()
 	lastState = nil
 end
 
@@ -2361,6 +2393,14 @@ local function start(player)
 			a.CFrame = CFrame.new(0, 0, 5)
 			zero(a)
 			setRep(a, b)
+		end
+
+		if spectateOn then
+			local tHum = theirChar:FindFirstChildOfClass("Humanoid")
+			local cam = workspace.CurrentCamera
+			if cam and tHum and cam.CameraSubject ~= tHum then
+				cam.CameraSubject = tHum
+			end
 		end
 
 		setState("Glued to " .. targetName)
@@ -2505,8 +2545,16 @@ local function setInvisible(on)
 end
 
 ------------------------------------------------------------------
--- panel
+-- panel (black + gold)
 ------------------------------------------------------------------
+local BG       = Color3.fromRGB(12, 12, 12)
+local GOLD     = Color3.fromRGB(235, 190, 30)
+local GOLD_DIM = Color3.fromRGB(190, 150, 35)
+local FILL     = Color3.fromRGB(62, 48, 8)      -- button fill
+local FILL_ON  = Color3.fromRGB(235, 190, 30)   -- toggled-on fill
+local ROW      = Color3.fromRGB(24, 20, 8)
+local FONT     = Enum.Font.Code
+
 local gui = Instance.new("ScreenGui")
 gui.Name = "GlueTestUI"
 gui.ResetOnSpawn = false
@@ -2521,89 +2569,125 @@ local function round(obj, r)
 end
 
 local main = Instance.new("Frame")
-main.Size = UDim2.new(0, 250, 0, 196)
-main.Position = UDim2.new(0.5, -125, 0.5, -98)
-main.BackgroundColor3 = Color3.fromRGB(18, 18, 24)
+main.Size = UDim2.new(0, 270, 0, 218)
+main.Position = UDim2.new(0.5, -135, 0.5, -109)
+main.BackgroundColor3 = BG
 main.BorderSizePixel = 0
 main.Active = true
 main.Draggable = true
 main.Parent = gui
-round(main, 12)
+round(main, 8)
+
+local stroke = Instance.new("UIStroke")
+stroke.Color = GOLD
+stroke.Thickness = 2
+stroke.Parent = main
 
 local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, -16, 0, 22)
-title.Position = UDim2.new(0, 8, 0, 6)
+title.Size = UDim2.new(1, -60, 0, 26)
+title.Position = UDim2.new(0, 12, 0, 8)
 title.BackgroundTransparency = 1
-title.Font = Enum.Font.GothamBold
-title.TextSize = 14
-title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.Font = FONT
+title.TextSize = 22
+title.TextColor3 = GOLD
 title.TextXAlignment = Enum.TextXAlignment.Left
-title.Text = "Glue + Invisible"
+title.Text = "Glue"
 title.Parent = main
 
+local closeBtn = Instance.new("TextButton")
+closeBtn.Size = UDim2.new(0, 30, 0, 26)
+closeBtn.Position = UDim2.new(1, -40, 0, 8)
+closeBtn.BackgroundColor3 = FILL
+closeBtn.BorderSizePixel = 0
+closeBtn.Font = FONT
+closeBtn.TextSize = 18
+closeBtn.TextColor3 = GOLD
+closeBtn.Text = "x"
+closeBtn.Parent = main
+round(closeBtn, 6)
+
+local selectedLabel = Instance.new("TextLabel")
+selectedLabel.Size = UDim2.new(1, -24, 0, 16)
+selectedLabel.Position = UDim2.new(0, 12, 0, 36)
+selectedLabel.BackgroundTransparency = 1
+selectedLabel.Font = FONT
+selectedLabel.TextSize = 14
+selectedLabel.TextColor3 = GOLD_DIM
+selectedLabel.TextXAlignment = Enum.TextXAlignment.Left
+selectedLabel.Text = "Selected: 0"
+selectedLabel.Parent = main
+
 local box = Instance.new("TextBox")
-box.Size = UDim2.new(1, -16, 0, 28)
-box.Position = UDim2.new(0, 8, 0, 34)
-box.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
+box.Size = UDim2.new(1, -24, 0, 30)
+box.Position = UDim2.new(0, 12, 0, 58)
+box.BackgroundColor3 = ROW
 box.BorderSizePixel = 0
-box.Font = Enum.Font.Gotham
-box.TextSize = 13
+box.Font = FONT
+box.TextSize = 15
 box.PlaceholderText = "Player name..."
+box.PlaceholderColor3 = Color3.fromRGB(140, 110, 25)
 box.Text = ""
-box.TextColor3 = Color3.fromRGB(235, 235, 240)
+box.TextColor3 = GOLD
 box.ClearTextOnFocus = false
 box.Parent = main
-round(box, 8)
+round(box, 6)
 
-local function mkButton(text, x, w, color)
+local function mkButton(text, right, y)
 	local b = Instance.new("TextButton")
-	b.Size = UDim2.new(w, -12, 0, 30)
-	b.Position = UDim2.new(x, 8, 0, 70)
-	b.BackgroundColor3 = color
+	b.Size = UDim2.new(0.5, -18, 0, 30)
+	b.Position = right and UDim2.new(0.5, 6, 0, y) or UDim2.new(0, 12, 0, y)
+	b.BackgroundColor3 = FILL
 	b.BorderSizePixel = 0
-	b.Font = Enum.Font.GothamBold
-	b.TextSize = 12
-	b.TextColor3 = Color3.fromRGB(255, 255, 255)
+	b.Font = FONT
+	b.TextSize = 14
+	b.TextColor3 = GOLD
 	b.Text = text
 	b.AutoButtonColor = true
 	b.Parent = main
-	round(b, 8)
+	round(b, 6)
 	return b
 end
 
-local glueBtn = mkButton("Glue", 0,   0.5, Color3.fromRGB(50, 170, 110))
-local stopBtn = mkButton("Stop", 0.5, 0.5, Color3.fromRGB(200, 70, 80))
+local function paintToggle(btn, label, on)
+	btn.Text = label .. (on and ": ON" or ": OFF")
+	btn.TextSize = 13
+	btn.BackgroundColor3 = on and FILL_ON or FILL
+	btn.TextColor3 = on and BG or GOLD
+end
 
-local INVIS_OFF = Color3.fromRGB(40, 40, 52)
-local INVIS_ON  = Color3.fromRGB(110, 90, 220)
+local glueBtn     = mkButton("Glue", false, 96)
+local stopBtn     = mkButton("Stop", true,  96)
+local invisBtn    = mkButton("", false, 132)
+local spectateBtn = mkButton("", true,  132)
 
-local invisBtn = Instance.new("TextButton")
-invisBtn.Size = UDim2.new(1, -16, 0, 28)
-invisBtn.Position = UDim2.new(0, 8, 0, 106)
-invisBtn.BackgroundColor3 = INVIS_OFF
-invisBtn.BorderSizePixel = 0
-invisBtn.Font = Enum.Font.GothamBold
-invisBtn.TextSize = 12
-invisBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-invisBtn.Text = "Invisible: OFF"
-invisBtn.AutoButtonColor = true
-invisBtn.Parent = main
-round(invisBtn, 8)
+local function paintGlue(on)
+	glueBtn.BackgroundColor3 = on and FILL_ON or FILL
+	glueBtn.TextColor3 = on and BG or GOLD
+end
+
+paintToggle(invisBtn, "Invisible", invisOn)
+paintToggle(spectateBtn, "Spectate", spectateOn)
 
 local status = Instance.new("TextLabel")
-status.Size = UDim2.new(1, -16, 0, 48)
-status.Position = UDim2.new(0, 8, 0, 142)
+status.Size = UDim2.new(1, -24, 0, 42)
+status.Position = UDim2.new(0, 12, 0, 170)
 status.BackgroundTransparency = 1
-status.Font = Enum.Font.Gotham
-status.TextSize = 11
+status.Font = FONT
+status.TextSize = 12
 status.TextWrapped = true
-status.TextColor3 = Color3.fromRGB(170, 170, 180)
+status.TextColor3 = GOLD_DIM
 status.TextXAlignment = Enum.TextXAlignment.Left
 status.TextYAlignment = Enum.TextYAlignment.Top
 status.Parent = main
 
 local function setStatus(text)
 	status.Text = text
+end
+
+local function updateSelected()
+	local n = 0
+	for _ in pairs(Selected) do n += 1 end
+	selectedLabel.Text = "Selected: " .. n
 end
 
 onState = setStatus
@@ -2619,19 +2703,33 @@ glueBtn.MouseButton1Click:Connect(function()
 
 	for k in pairs(Selected) do Selected[k] = nil end   -- one target at a time
 	Selected[p.UserId] = true
+	updateSelected()
 
 	start(p)   -- runs until Stop is pressed
+	paintGlue(true)
 end)
 
 stopBtn.MouseButton1Click:Connect(function()
 	stop()
+	paintGlue(false)
 	setStatus("Stopped")
 end)
 
 invisBtn.MouseButton1Click:Connect(function()
 	setInvisible(not invisOn)
-	invisBtn.Text = invisOn and "Invisible: ON" or "Invisible: OFF"
-	invisBtn.BackgroundColor3 = invisOn and INVIS_ON or INVIS_OFF
+	paintToggle(invisBtn, "Invisible", invisOn)
+end)
+
+spectateBtn.MouseButton1Click:Connect(function()
+	spectateOn = not spectateOn
+	paintToggle(spectateBtn, "Spectate", spectateOn)
+	if not spectateOn then
+		restoreCamera()
+	end
+end)
+
+closeBtn.MouseButton1Click:Connect(function()
+	if getgenv().GlueStop then getgenv().GlueStop() end
 end)
 
 getgenv().GlueStop = function()
@@ -2639,7 +2737,6 @@ getgenv().GlueStop = function()
 	setInvisible(false)
 	gui:Destroy()
 end
-
 	-- ^^^^^^^^^^^^^^^^^^^^  END OF YOUR CODE  ^^^^^^^^^^^^^^^^^^^^
 	return "Attractor ran."
 end
