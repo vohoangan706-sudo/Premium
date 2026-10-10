@@ -1,22 +1,3 @@
---[[
-    Terminalpanel Premium
-    ------------------------------------------------------------
-    Place this as a second LocalScript inside StarterPlayerScripts,
-    alongside the main TerminalPanel script.
-
-    This is a fully separate script on purpose: it has its own
-    Luau 200-local-variable budget, independent of the main
-    TerminalPanel script. All the admin-exclusive tools that used
-    to live inside TerminalPanel (admincheck, check2, godmode) have
-    been moved here so the main script has headroom again.
-
-    If the local player's UserId isn't in ADMIN_USER_IDS below, this
-    entire script does nothing at all — no UI is created, nothing is
-    visible, nothing is discoverable. That's stronger hiding than
-    per-command checks can offer, since there's no shared panel for
-    a non-admin to even probe with command names.
---]]
-
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
@@ -1072,7 +1053,7 @@ local function createAdminCheckPanel()
 	titleLabel.Size = UDim2.new(1, -34, 0, 24)
 	titleLabel.Position = UDim2.new(0, 8, 0, 6)
 	titleLabel.BackgroundTransparency = 1
-	titleLabel.Text = "Admin Check"
+	titleLabel.Text = "Child emperor void"
 	titleLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
 	titleLabel.Font = Enum.Font.Code
 	titleLabel.TextSize = 16
