@@ -210,12 +210,20 @@ local function pressKey(code)
 	end)
 end
 
+-- plain left mouse click (M1). Uses the executor's mouse1click when it exists,
+-- otherwise VirtualInputManager with a mouse move first and a short hold.
 local function click()
+	local fn = rawget(getgenv(), "mouse1click") or (getfenv and getfenv().mouse1click)
+	if type(fn) == "function" and pcall(fn) then return end
+
 	local cam = workspace.CurrentCamera
 	local size = cam and cam.ViewportSize or Vector2.new(800, 600)
+	local x, y = size.X / 2, size.Y / 2
 	pcall(function()
-		VirtualInputManager:SendMouseButtonEvent(size.X / 2, size.Y / 2, 0, true, game, 0)
-		VirtualInputManager:SendMouseButtonEvent(size.X / 2, size.Y / 2, 0, false, game, 0)
+		VirtualInputManager:SendMouseMoveEvent(x, y, game)
+		VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
+		task.wait(0.03)
+		VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
 	end)
 end
 
@@ -725,10 +733,11 @@ end
 
 local main = Instance.new("Frame")
 main.Size = UDim2.new(0, 270, 0, 282)
-main.Position = UDim2.new(0.5, -135, 0.5, -141)
+main.Position = UDim2.new(0, 12, 1, -(282 + 60))   -- sits above the toggle button, bottom-left
 main.BackgroundColor3 = BG
 main.BorderSizePixel = 0
 main.Active = true
+main.Visible = false          -- starts hidden: only the toggle button shows
 main.Draggable = true
 main.Parent = gui
 round(main, 8)
@@ -836,8 +845,31 @@ movesBtn.MouseButton1Click:Connect(function()
 	paintToggle(movesBtn, "Dash + moves in farm", CFG.USE_MOVES)
 end)
 
+-- toggle button, bottom-left corner, always visible
+local toggleBtn = Instance.new("TextButton")
+toggleBtn.Name = "TwinFangsToggle"
+toggleBtn.Size = UDim2.new(0, 120, 0, 36)
+toggleBtn.Position = UDim2.new(0, 12, 1, -48)
+toggleBtn.BackgroundColor3 = BG
+toggleBtn.BorderSizePixel = 0
+toggleBtn.Font = FONT
+toggleBtn.TextSize = 14
+toggleBtn.TextColor3 = GOLD
+toggleBtn.Text = "Twin Fangs"
+toggleBtn.AutoButtonColor = true
+toggleBtn.Parent = gui
+round(toggleBtn, 8)
+local toggleStroke = Instance.new("UIStroke")
+toggleStroke.Color = GOLD
+toggleStroke.Thickness = 2
+toggleStroke.Parent = toggleBtn
+
+toggleBtn.MouseButton1Click:Connect(function()
+	main.Visible = not main.Visible
+end)
+
 closeBtn.MouseButton1Click:Connect(function()
-	if getgenv().TFStop then getgenv().TFStop() end
+	main.Visible = false      -- x just hides the panel; the toggle button brings it back
 end)
 
 task.spawn(function()
