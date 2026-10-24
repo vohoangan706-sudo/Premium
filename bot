@@ -301,7 +301,7 @@ local function setSpectate(player)
 	unbindSpec()
 	-- three layers so the game can't win: last in the render step, plus RenderStepped and Heartbeat
 	local okBind = pcall(function()
-		RunService:BindToRenderStep("TFSpectate", Enum.RenderPriority.Last.Value, specApply)
+		RunService:BindToRenderStep("TFSpectate", 99999, specApply)   -- far after Last (2000): nothing else can run after us
 	end)
 	if not okBind then
 		specRender = RunService.RenderStepped:Connect(specApply)
@@ -1113,7 +1113,18 @@ task.spawn(function()
 		paintToggle(runBtn, "Running", running)
 		paintToggle(invisBtn, "Invisible", invisOn)
 		lockFriendBtn()
-		noteLabel.Text = specPlayer and ("Spectating: " .. specPlayer.DisplayName) or "Spectate: idle (starts when it picks a target)"
+		do
+			local cam = workspace.CurrentCamera
+			local thrp = specPlayer and rootOf(specPlayer.Character)
+			if specPlayer and cam and thrp then
+				noteLabel.Text = string.format("Spectating: %s | cam: %s | dist: %.0f",
+					specPlayer.DisplayName, tostring(cam.CameraType):gsub("Enum.CameraType.", ""), (cam.CFrame.Position - thrp.Position).Magnitude)
+			elseif specPlayer then
+				noteLabel.Text = "Spectating: " .. specPlayer.DisplayName .. " (no body yet)"
+			else
+				noteLabel.Text = "Spectate: idle (starts when it picks a target)"
+			end
+		end
 		paintToggle(movesBtn, "Dash + moves in farm", CFG.USE_MOVES)
 		task.wait(0.3)
 	end
