@@ -470,7 +470,7 @@ local function runTwinFangs(track)
 
 	for idx, target in ipairs(queue) do
 		if not running or cutoff or tick() >= hardEnd then break end
-		setSpectate(target)
+		-- camera stays on the ONE player picked in ultPhase (no switching between targets)
 
 		local tChar = target.Character
 		local tRoot, tHum = rootOf(tChar), humOf(tChar)
