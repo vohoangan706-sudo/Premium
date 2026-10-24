@@ -256,6 +256,7 @@ end
 -- so the game / your own character can't pull the camera back.
 ------------------------------------------------------------------
 local specPlayer
+local specBeat, specRender
 local plannedQueue          -- players picked in advance to get Twin Fangs (spectated during the ult)
 
 local function specApply()
@@ -267,24 +268,37 @@ local function specApply()
 		hum = humOf(localPlayer.Character)      -- target gone: look at yourself
 	end
 	if hum then
-		if cam.CameraSubject ~= hum then cam.CameraSubject = hum end
 		if cam.CameraType ~= Enum.CameraType.Custom then cam.CameraType = Enum.CameraType.Custom end
+		if cam.CameraSubject ~= hum then cam.CameraSubject = hum end
 	end
+end
+
+local function unbindSpec()
+	pcall(function() RunService:UnbindFromRenderStep("TFSpectate") end)
+	if specBeat   then specBeat:Disconnect()   specBeat   = nil end
+	if specRender then specRender:Disconnect() specRender = nil end
 end
 
 local function setSpectate(player)
 	if not CFG.SPECTATE or not player or player == localPlayer then return end
-	if specPlayer == player then return end
+	if specPlayer == player and specBeat then return end
 	specPlayer = player
 
-	pcall(function() RunService:UnbindFromRenderStep("TFSpectate") end)
-	RunService:BindToRenderStep("TFSpectate", Enum.RenderPriority.Camera.Value + 1, specApply)
+	unbindSpec()
+	-- three layers so the game can't win: last in the render step, plus RenderStepped and Heartbeat
+	local okBind = pcall(function()
+		RunService:BindToRenderStep("TFSpectate", Enum.RenderPriority.Last.Value, specApply)
+	end)
+	if not okBind then
+		specRender = RunService.RenderStepped:Connect(specApply)
+	end
+	specBeat = RunService.Heartbeat:Connect(specApply)
 	specApply()
 end
 
 local function clearSpectate()
 	specPlayer = nil
-	pcall(function() RunService:UnbindFromRenderStep("TFSpectate") end)
+	unbindSpec()
 
 	local cam = workspace.CurrentCamera
 	local hum = humOf(localPlayer.Character)
@@ -1085,6 +1099,7 @@ task.spawn(function()
 		paintToggle(runBtn, "Running", running)
 		paintToggle(invisBtn, "Invisible", invisOn)
 		lockFriendBtn()
+		noteLabel.Text = specPlayer and ("Spectating: " .. specPlayer.DisplayName) or "Spectate: idle (starts when it picks a target)"
 		paintToggle(movesBtn, "Dash + moves in farm", CFG.USE_MOVES)
 		task.wait(0.3)
 	end
