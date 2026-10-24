@@ -8,7 +8,7 @@
     2. ULT    - once the ult is on, it presses the Twin Fangs key (2). The Project Yielding
                 routine then runs when the Twin Fangs animation plays: glue to each hittable
                 player in turn until their hit animation (max PER_TARGET_MAX s), then at the
-                animation cutoff get anchored at -777y (no more -10000y drop).
+                animation cutoff get anchored at -501y by default (no more -10000y drop).
     3. RETURN - after RETURN_DELAY s in the void (and once the ult is over) go back to where you were.
     4. REPEAT - back to step 1.
 
@@ -40,6 +40,7 @@ local CFG = {
 	HIT_FRIENDS    = false,               -- LOCKED: friends are always skipped (the panel button cannot turn this on)
 	TARGET_TIME    = 6,                   -- farm: seconds on one target before switching
 	ULT_TRY_EVERY  = 2,                   -- farm: press the ult key this often
+	SPECTATE       = true,                -- auto spectate: the farm target, then a player who will get Twin Fangs
 	USE_MOVES      = true,                -- farm: also use dash + abilities
 	FARM_SLOTS     = { 1, 2, 3, 4 },      -- farm: ability keys to use (1 to 4)
 	MOVE_EVERY     = 0.6,                 -- farm: try the next ability this often
@@ -47,9 +48,9 @@ local CFG = {
 	DASH_EVERY     = 2.5,                 -- farm: dash this often
 	MOVE_KEY       = Enum.KeyCode.Two,    -- Twin Fangs move (slot 2 while ulted)
 	PER_TARGET_MAX = 0.4,                 -- twin fangs: max seconds per target
-	CUTOFF_TIME    = 1.85,                -- HARD limit: seconds after Twin Fangs starts, then you are anchored at -777y
-	RETURN_DELAY   = 3,                   -- seconds anchored at -777y before coming back
-	VOID_POS       = Vector3.new(0, -777, 0),   -- where you get anchored after the grab
+	CUTOFF_TIME    = 1.85,                -- HARD limit: seconds after Twin Fangs starts, then you are anchored at -501y (default)
+	RETURN_DELAY   = 3,                   -- seconds anchored (height dropdown) before coming back
+	VOID_POS       = Vector3.new(0, -501, 0),   -- where you get anchored after the grab (dropdown: -501y / -777y)
 	MINX = -500, MAXX = 800, MINZ = -600, MAXZ = 700,   -- arena bounds (from the original)
 }
 
@@ -250,6 +251,52 @@ local function moveReady(slot)
 end
 
 ------------------------------------------------------------------
+-- auto spectate
+-- Re-applied every frame AFTER the game's camera script (BindToRenderStep at Camera+1),
+-- so the game / your own character can't pull the camera back.
+------------------------------------------------------------------
+local specPlayer
+local plannedQueue          -- players picked in advance to get Twin Fangs (spectated during the ult)
+
+local function specApply()
+	local cam = workspace.CurrentCamera
+	if not cam then return end
+
+	local hum = specPlayer and specPlayer.Character and humOf(specPlayer.Character)
+	if not hum or not hum.Parent then
+		hum = humOf(localPlayer.Character)      -- target gone: look at yourself
+	end
+	if hum then
+		if cam.CameraSubject ~= hum then cam.CameraSubject = hum end
+		if cam.CameraType ~= Enum.CameraType.Custom then cam.CameraType = Enum.CameraType.Custom end
+	end
+end
+
+local function setSpectate(player)
+	if not CFG.SPECTATE or not player or player == localPlayer then return end
+	if specPlayer == player then return end
+	specPlayer = player
+
+	pcall(function() RunService:UnbindFromRenderStep("TFSpectate") end)
+	RunService:BindToRenderStep("TFSpectate", Enum.RenderPriority.Camera.Value + 1, specApply)
+	specApply()
+end
+
+local function clearSpectate()
+	specPlayer = nil
+	pcall(function() RunService:UnbindFromRenderStep("TFSpectate") end)
+
+	local cam = workspace.CurrentCamera
+	local hum = humOf(localPlayer.Character)
+	if cam and hum then
+		pcall(function()
+			cam.CameraSubject = hum
+			cam.CameraType = Enum.CameraType.Custom
+		end)
+	end
+end
+
+------------------------------------------------------------------
 -- targeting (immunity checks ported from the original; friends skipped by default)
 ------------------------------------------------------------------
 local IMMUNE = { "ForceField", "AbsoluteImmortal", "BeingGrabbed", "HunterCounter", "AtomicCounter", "forcefield", "Counter" }
@@ -321,7 +368,7 @@ local function twinTargetList()
 	return list
 end
 
--- glass platform at -777y so you rest there instead of falling to -10000y
+-- glass platform at the chosen height (default -501y) so you rest there instead of falling to -10000y
 local voidPlatform
 local function ensureVoidPlatform()
 	if voidPlatform and voidPlatform.Parent then return end
@@ -379,11 +426,23 @@ local function runTwinFangs(track)
 	-- hit everyone: link, wait for their hit animation (max PER_TARGET_MAX s), next.
 	-- HARD limit: the whole hit phase ends at CUTOFF_TIME, the time left is shared between
 	-- the remaining players so everyone gets a turn as far as the time allows.
-	local queue = twinTargetList()
+	local queue = {}
+	local inQueue = {}
+	for _, p in ipairs(plannedQueue or {}) do
+		if p.Parent and rootOf(p.Character) and humOf(p.Character) then
+			table.insert(queue, p)
+			inQueue[p] = true
+		end
+	end
+	for _, p in ipairs(twinTargetList()) do      -- anyone who joined since, so nobody is missed
+		if not inQueue[p] then table.insert(queue, p) end
+	end
+	plannedQueue = nil
 	local hardEnd = startedAt + CFG.CUTOFF_TIME
 
 	for idx, target in ipairs(queue) do
 		if not running or cutoff or tick() >= hardEnd then break end
+		setSpectate(target)
 
 		local tChar = target.Character
 		local tRoot, tHum = rootOf(tChar), humOf(tChar)
@@ -424,8 +483,8 @@ local function runTwinFangs(track)
 		task.wait()
 	end
 
-	-- anchor at -777y (zero velocity every Heartbeat) instead of dropping to -10000y
-	setPhase("Anchored at -777y")
+	-- anchor at the chosen height (default -501y, zero velocity every Heartbeat) instead of dropping to -10000y
+	setPhase("Anchored at " .. math.floor(CFG.VOID_POS.Y + 0.5) .. "y")
 	ensureVoidPlatform()
 	local function pose()
 		local r = rootOf(localPlayer.Character)
@@ -539,6 +598,7 @@ local function farmPhase()
 				if tRoot and (linkTheir ~= tRoot or linkMy ~= myRoot) then
 					link(myRoot, tRoot, hum)
 				end
+				setSpectate(target)
 				setPhase("Hitting " .. target.DisplayName .. " (building ult)")
 				click()
 			else
@@ -557,6 +617,10 @@ local function ultPhase()
 	unlink()
 	glueHome, glueHomeRoot = nil, nil   -- the ult takes over from here
 	setPhase("Ult on - using Twin Fangs")
+
+	-- decide now who will get Twin Fangs first and spectate them
+	plannedQueue = twinTargetList()
+	if plannedQueue[1] then setSpectate(plannedQueue[1]) end
 
 	local deadline = tick() + 8
 	while running and not twinBusy and tick() < deadline do
@@ -607,6 +671,7 @@ local function stopBot()
 	if charConn then charConn:Disconnect() charConn = nil end
 	unlink()
 	restoreHome()
+	clearSpectate()
 	setPhase("Stopped")
 end
 
@@ -1030,6 +1095,7 @@ end)
 ------------------------------------------------------------------
 getgenv().TFStop = function()
 	stopBot()
+	clearSpectate()
 	if animConn then animConn:Disconnect() animConn = nil end
 	if voidCharConn then voidCharConn:Disconnect() voidCharConn = nil end
 	if voidHealthConn then voidHealthConn:Disconnect() voidHealthConn = nil end
