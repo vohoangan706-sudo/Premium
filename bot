@@ -156,6 +156,7 @@ end)
 ------------------------------------------------------------------
 local linkMy, linkTheir
 local linkBeat, linkRot
+local glueHome, glueHomeRoot   -- where you stood before the glue first moved you to (0,0,5)
 
 local function unlink()
 	if linkBeat then linkBeat:Disconnect() linkBeat = nil end
@@ -174,8 +175,20 @@ local function unlink()
 	linkMy, linkTheir = nil, nil
 end
 
+-- put you back where you were before the farm glue moved you (used on stop / shutdown)
+local function restoreHome()
+	local root = rootOf(localPlayer.Character)
+	if root and glueHome and glueHomeRoot == root then
+		root.CFrame = glueHome
+		zero(root)
+	end
+	glueHome, glueHomeRoot = nil, nil
+end
+
 local function link(a, b, hum)
 	unlink()
+	if not running then return end   -- stopped / shutting down: never (re)glue, or you stay stuck at (0,0,5)
+	if not glueHome or glueHomeRoot ~= a then glueHome, glueHomeRoot = a.CFrame, a end
 	linkMy, linkTheir = a, b
 
 	if hum then
@@ -542,6 +555,7 @@ end
 
 local function ultPhase()
 	unlink()
+	glueHome, glueHomeRoot = nil, nil   -- the ult takes over from here
 	setPhase("Ult on - using Twin Fangs")
 
 	local deadline = tick() + 8
@@ -592,6 +606,7 @@ local function stopBot()
 	running = false
 	if charConn then charConn:Disconnect() charConn = nil end
 	unlink()
+	restoreHome()
 	setPhase("Stopped")
 end
 
@@ -911,6 +926,14 @@ shutdownBtn.MouseButton1Click:Connect(function()
 		while twinBusy and tick() - t0 < 10 do
 			task.wait(0.1)
 		end
+
+		-- a farm loop step that was mid-press when you hit Shutdown may still be finishing:
+		-- give it a moment, then release the glue for good and go back to your real spot
+		task.wait(0.3)
+		unlink()
+		restoreHome()
+		local hum = humOf(localPlayer.Character)
+		if hum then pcall(function() hum.AutoRotate = true end) end
 
 		-- 2) full shutdown: restores everything and destroys the panel and the toggle button
 		pcall(function() getgenv().TFStop() end)
