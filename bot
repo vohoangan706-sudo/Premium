@@ -40,6 +40,7 @@ local CFG = {
 	HIT_FRIENDS    = false,               -- LOCKED: friends are always skipped (the panel button cannot turn this on)
 	TARGET_TIME    = 6,                   -- farm: seconds on one target before switching
 	ULT_TRY_EVERY  = 2,                   -- farm: press the ult key this often
+	SPECTATE_DIST  = 12,                  -- spectate: camera distance behind the target (studs)
 	SPECTATE       = true,                -- auto spectate: the farm target, then a player who will get Twin Fangs
 	USE_MOVES      = true,                -- farm: also use dash + abilities
 	FARM_SLOTS     = { 1, 2, 3, 4 },      -- farm: ability keys to use (1 to 4)
@@ -259,18 +260,31 @@ local specPlayer
 local specBeat, specRender
 local plannedQueue          -- players picked in advance to get Twin Fangs (spectated during the ult)
 
+-- We drive the camera CFrame ourselves (Scriptable) instead of only changing CameraSubject:
+-- if the game's camera script doesn't follow CameraSubject, the camera just never moved.
 local function specApply()
 	local cam = workspace.CurrentCamera
 	if not cam then return end
 
-	local hum = specPlayer and specPlayer.Character and humOf(specPlayer.Character)
-	if not hum or not hum.Parent then
-		hum = humOf(localPlayer.Character)      -- target gone: look at yourself
+	local char = specPlayer and specPlayer.Character
+	local hrp = char and rootOf(char)
+	if not hrp or not hrp.Parent then
+		-- target gone: hand the camera back to your own character
+		local own = humOf(localPlayer.Character)
+		if own then
+			if cam.CameraType ~= Enum.CameraType.Custom then cam.CameraType = Enum.CameraType.Custom end
+			if cam.CameraSubject ~= own then cam.CameraSubject = own end
+		end
+		return
 	end
-	if hum then
-		if cam.CameraType ~= Enum.CameraType.Custom then cam.CameraType = Enum.CameraType.Custom end
-		if cam.CameraSubject ~= hum then cam.CameraSubject = hum end
-	end
+
+	local hum = humOf(char)
+	if hum and cam.CameraSubject ~= hum then cam.CameraSubject = hum end
+	if cam.CameraType ~= Enum.CameraType.Scriptable then cam.CameraType = Enum.CameraType.Scriptable end
+
+	local focus = hrp.Position + Vector3.new(0, 2, 0)
+	local pos = focus - hrp.CFrame.LookVector * CFG.SPECTATE_DIST + Vector3.new(0, 5, 0)
+	cam.CFrame = CFrame.lookAt(pos, focus)
 end
 
 local function unbindSpec()
