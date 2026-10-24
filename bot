@@ -8,7 +8,7 @@
     2. ULT    - once the ult is on, it presses the Twin Fangs key (2). The Project Yielding
                 routine then runs when the Twin Fangs animation plays: glue to each hittable
                 player in turn until their hit animation (max PER_TARGET_MAX s), then at the
-                animation cutoff get anchored at -500y (no more -10000y drop).
+                animation cutoff get anchored at -777y (no more -10000y drop).
     3. RETURN - after RETURN_DELAY s in the void (and once the ult is over) go back to where you were.
     4. REPEAT - back to step 1.
 
@@ -47,9 +47,9 @@ local CFG = {
 	DASH_EVERY     = 2.5,                 -- farm: dash this often
 	MOVE_KEY       = Enum.KeyCode.Two,    -- Twin Fangs move (slot 2 while ulted)
 	PER_TARGET_MAX = 0.4,                 -- twin fangs: max seconds per target
-	CUTOFF_TIME    = 2,                   -- seconds after Twin Fangs starts before you get anchored at -500y
-	RETURN_DELAY   = 3,                   -- seconds anchored at -500y before coming back
-	VOID_POS       = Vector3.new(0, -500, 0),   -- where you get anchored after the grab
+	CUTOFF_TIME    = 1.85,                -- HARD limit: seconds after Twin Fangs starts, then you are anchored at -777y
+	RETURN_DELAY   = 3,                   -- seconds anchored at -777y before coming back
+	VOID_POS       = Vector3.new(0, -777, 0),   -- where you get anchored after the grab
 	MINX = -500, MAXX = 800, MINZ = -600, MAXZ = 700,   -- arena bounds (from the original)
 }
 
@@ -308,7 +308,7 @@ local function twinTargetList()
 	return list
 end
 
--- glass platform at -500y so you rest there instead of falling to -10000y
+-- glass platform at -777y so you rest there instead of falling to -10000y
 local voidPlatform
 local function ensureVoidPlatform()
 	if voidPlatform and voidPlatform.Parent then return end
@@ -341,7 +341,7 @@ local function runTwinFangs(track)
 	local keepVel = true
 	local deadline = startedAt + 3
 
-	-- cutoff: animation passes 70/30 s, stops, or CUTOFF_TIME (2 s) pass
+	-- cutoff: animation passes 70/30 s, stops, or CUTOFF_TIME (1.85 s, hard limit) pass
 	task.spawn(function()
 		while true do
 			task.wait()
@@ -364,11 +364,13 @@ local function runTwinFangs(track)
 	end)
 
 	-- hit everyone: link, wait for their hit animation (max PER_TARGET_MAX s), next.
-	-- The cutoff no longer ends this loop; the void drop only happens after the last player.
+	-- HARD limit: the whole hit phase ends at CUTOFF_TIME, the time left is shared between
+	-- the remaining players so everyone gets a turn as far as the time allows.
 	local queue = twinTargetList()
+	local hardEnd = startedAt + CFG.CUTOFF_TIME
 
 	for idx, target in ipairs(queue) do
-		if not running then break end   -- no cutoff / animation / time limit: go through the WHOLE list
+		if not running or cutoff or tick() >= hardEnd then break end
 
 		local tChar = target.Character
 		local tRoot, tHum = rootOf(tChar), humOf(tChar)
@@ -376,7 +378,8 @@ local function runTwinFangs(track)
 		local mRoot = rootOf(mChar)
 
 		if tRoot and tHum and mRoot then
-			local per = CFG.PER_TARGET_MAX
+			local left = #queue - idx + 1
+			local per = math.clamp((hardEnd - tick()) / left, 0.05, CFG.PER_TARGET_MAX)
 
 			link(mRoot, tRoot, humOf(mChar))
 
@@ -390,7 +393,7 @@ local function runTwinFangs(track)
 			end)
 
 			local t0 = tick()
-			while running and not hit and tick() - t0 < per do
+			while running and not hit and not cutoff and tick() - t0 < per and tick() < hardEnd do
 				RunService.Heartbeat:Wait()
 			end
 
@@ -408,8 +411,8 @@ local function runTwinFangs(track)
 		task.wait()
 	end
 
-	-- anchor at -500y (zero velocity every Heartbeat) instead of dropping to -10000y
-	setPhase("Anchored at -500y")
+	-- anchor at -777y (zero velocity every Heartbeat) instead of dropping to -10000y
+	setPhase("Anchored at -777y")
 	ensureVoidPlatform()
 	local function pose()
 		local r = rootOf(localPlayer.Character)
@@ -729,8 +732,8 @@ local function round(obj, r)
 end
 
 local main = Instance.new("Frame")
-main.Size = UDim2.new(0, 270, 0, 282)
-main.Position = UDim2.new(0, 12, 1, -(282 + 60))   -- sits above the toggle button, bottom-left
+main.Size = UDim2.new(0, 270, 0, 366)
+main.Position = UDim2.new(0, 12, 1, -(366 + 60))   -- sits above the toggle button, bottom-left
 main.BackgroundColor3 = BG
 main.BorderSizePixel = 0
 main.Active = true
@@ -813,7 +816,116 @@ local movesBtn = mkButton(false, 202)
 movesBtn.Size = UDim2.new(1, -24, 0, 32)
 paintToggle(movesBtn, "Dash + moves in farm", CFG.USE_MOVES)
 
-local noteLabel = label("Friends are skipped. Invisible + antivoid start on execute.", 11, GOLD_DIM, 244, 30)
+-- "Height" dropdown: where you get anchored after Twin Fangs
+local HEIGHTS = {
+	{ text = "-777y", y = -777 },
+	{ text = "-501y", y = -501 },
+}
+
+local function heightText()
+	local y = math.floor(CFG.VOID_POS.Y + 0.5)
+	return "Height: " .. y .. "y  v"
+end
+
+local heightBtn = Instance.new("TextButton")
+heightBtn.Name = "Height"
+heightBtn.Size = UDim2.new(1, -24, 0, 32)
+heightBtn.Position = UDim2.new(0, 12, 0, 240)
+heightBtn.BackgroundColor3 = FILL
+heightBtn.BorderSizePixel = 0
+heightBtn.Font = FONT
+heightBtn.TextSize = 13
+heightBtn.TextColor3 = GOLD
+heightBtn.Text = heightText()
+heightBtn.Parent = main
+round(heightBtn, 6)
+
+local heightList = Instance.new("Frame")
+heightList.Size = UDim2.new(1, -24, 0, #HEIGHTS * 30 + 4)
+heightList.Position = UDim2.new(0, 12, 0, 240 + 34)
+heightList.BackgroundColor3 = BG
+heightList.BorderSizePixel = 0
+heightList.Visible = false
+heightList.ZIndex = 10
+heightList.Parent = main
+round(heightList, 6)
+local heightStroke = Instance.new("UIStroke")
+heightStroke.Color = GOLD
+heightStroke.Thickness = 1
+heightStroke.Parent = heightList
+
+for i, opt in ipairs(HEIGHTS) do
+	local ob = Instance.new("TextButton")
+	ob.Size = UDim2.new(1, -8, 0, 28)
+	ob.Position = UDim2.new(0, 4, 0, 2 + (i - 1) * 30)
+	ob.BackgroundColor3 = FILL
+	ob.BorderSizePixel = 0
+	ob.Font = FONT
+	ob.TextSize = 13
+	ob.TextColor3 = GOLD
+	ob.Text = opt.text
+	ob.ZIndex = 11
+	ob.Parent = heightList
+	round(ob, 5)
+
+	ob.MouseButton1Click:Connect(function()
+		CFG.VOID_POS = Vector3.new(0, opt.y, 0)
+		-- rebuild the glass platform at the new height
+		pcall(function() if voidPlatform then voidPlatform:Destroy() end end)
+		voidPlatform = nil
+		if twinBusy then ensureVoidPlatform() end
+		heightBtn.Text = heightText()
+		heightList.Visible = false
+	end)
+end
+
+heightBtn.MouseButton1Click:Connect(function()
+	heightList.Visible = not heightList.Visible
+end)
+
+local shutdownBtn = Instance.new("TextButton")
+shutdownBtn.Name = "Shutdown"
+shutdownBtn.Size = UDim2.new(1, -24, 0, 32)
+shutdownBtn.Position = UDim2.new(0, 12, 0, 282)
+shutdownBtn.BackgroundColor3 = Color3.fromRGB(90, 20, 20)
+shutdownBtn.BorderSizePixel = 0
+shutdownBtn.Font = FONT
+shutdownBtn.TextSize = 13
+shutdownBtn.TextColor3 = Color3.fromRGB(255, 120, 120)
+shutdownBtn.Text = "Shutdown"
+shutdownBtn.Parent = main
+round(shutdownBtn, 6)
+
+-- Shutdown: stop everything, destroy the panel AND the toggle button, and once that is
+-- finished teleport you up to 500y.
+local shuttingDown = false
+shutdownBtn.MouseButton1Click:Connect(function()
+	if shuttingDown then return end
+	shuttingDown = true
+	shutdownBtn.Text = "Shutting down..."
+
+	task.spawn(function()
+		-- 1) stop the bot, but keep antivoid up until a running Twin Fangs cast has brought you back
+		stopBot()
+		local t0 = tick()
+		while twinBusy and tick() - t0 < 10 do
+			task.wait(0.1)
+		end
+
+		-- 2) full shutdown: restores everything and destroys the panel and the toggle button
+		pcall(function() getgenv().TFStop() end)
+
+		-- 3) shutdown finished: teleport up to 500y
+		local r = rootOf(localPlayer.Character)
+		if r then
+			r.AssemblyLinearVelocity  = Vector3.zero
+			r.AssemblyAngularVelocity = Vector3.zero
+			r.CFrame = CFrame.new(r.Position.X, 500, r.Position.Z)
+		end
+	end)
+end)
+
+local noteLabel = label("Friends are skipped. Invisible + antivoid start on execute.", 11, GOLD_DIM, 324, 30)
 
 paintToggle(runBtn, "Running", running)
 local function lockFriendBtn()
