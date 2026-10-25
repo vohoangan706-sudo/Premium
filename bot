@@ -42,6 +42,7 @@ local CFG = {
 	ULT_TRY_EVERY  = 2,                   -- farm: press the ult key this often
 	ANTI_HIT       = true,                -- anti-hit (ragdoll desync) is always on, built into the panel (no button)
 	DESYNC_POS     = Vector3.new(9e9, 9e9, 9e9),   -- where the server sees you while you are ragdolled (same as the original)
+	M1_EXEC        = true,                -- M1: also call the executor's mouse1click when it exists
 	SPECTATE_DIST  = 12,                  -- spectate: camera distance behind the target (studs)
 	SPECTATE       = true,                -- auto spectate: the farm target, then a player who will get Twin Fangs
 	USE_MOVES      = true,                -- farm: also use dash + abilities
@@ -229,17 +230,36 @@ local function pressKey(code)
 	end)
 end
 
--- plain left mouse click (M1) through VirtualInputManager only: no executor mouse1click,
--- no mouse-move event (those were the new calls added last time). Short hold, screen center.
+-- plain left mouse click (M1). Four methods per click, because the original's M1 code was not
+-- in the part of the file I can read, so I can't tell which one the game listens to:
+--   1) VirtualInputManager press + short hold + release at the screen center
+--   2) VirtualUser Button1Down / Button1Up
+--   3) Tool:Activate() when you are holding a tool
+--   4) the executor's mouse1click (if it has one; set CFG.M1_EXEC = false to skip it)
+local VirtualUser = game:GetService("VirtualUser")
+
 local function click()
 	local cam = workspace.CurrentCamera
 	local size = cam and cam.ViewportSize or Vector2.new(800, 600)
 	local x, y = size.X / 2, size.Y / 2
-	pcall(function()
-		VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
-		task.wait(0.03)
-		VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
-	end)
+	local camCF = cam and cam.CFrame or CFrame.new()
+
+	pcall(function() VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0) end)
+	pcall(function() VirtualUser:Button1Down(Vector2.new(x, y), camCF) end)
+
+	local char = localPlayer.Character
+	local tool = char and char:FindFirstChildOfClass("Tool")
+	if tool then pcall(function() tool:Activate() end) end
+
+	if CFG.M1_EXEC then
+		local fn = rawget(getgenv(), "mouse1click")
+		if type(fn) == "function" then pcall(fn) end
+	end
+
+	task.wait(0.03)
+
+	pcall(function() VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0) end)
+	pcall(function() VirtualUser:Button1Up(Vector2.new(x, y), camCF) end)
 end
 
 local SLOT_KEYS = { Enum.KeyCode.One, Enum.KeyCode.Two, Enum.KeyCode.Three, Enum.KeyCode.Four }
