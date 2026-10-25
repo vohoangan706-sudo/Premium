@@ -2,7 +2,7 @@
   AUTO TWIN FANGS FARM  (own panel, starts as soon as you execute it)
 
   Loop:
-    1. FARM   - glue (PhysicsRepRootPart) to a player and spam M1 + dash + moves 1-4 to build the ult.
+    1. FARM   - glue (PhysicsRepRootPart) to a player and M1 (non-stop, paused during the ult) + dash + moves 1-4 to build the ult.
                 Every few seconds it also presses the ult key; when the ult goes
                 off your character gets the "Ulted" attribute and the loop moves on.
     2. ULT    - once the ult is on, it presses the Twin Fangs key (2). The Project Yielding
@@ -44,6 +44,7 @@ local CFG = {
 	DESYNC_POS     = Vector3.new(9e9, 9e9, 9e9),   -- where the server sees you while you are ragdolled (same as the original)
 	M1_FORCE_MOBILE = false,              -- M1: treat this device as mobile (use the on-screen M1 button)
 	M1_BUTTON_NAME = "",                  -- M1 (mobile): exact name of the M1 button if auto-detect picks the wrong one
+	M1_INTERVAL    = 0.05,                -- M1: seconds between clicks (it clicks forever, paused only during the ult)
 	M1_EXEC        = true,                -- M1: also call the executor's mouse1click when it exists
 	SPECTATE_DIST  = 12,                  -- spectate: camera distance behind the target (studs)
 	SPECTATE       = true,                -- auto spectate: the farm target, then a player who will get Twin Fangs
@@ -825,7 +826,6 @@ local function farmPhase()
 				end
 				setSpectate(target)
 				setPhase("Hitting " .. target.DisplayName .. " (building ult)")
-				click()
 			else
 				unlink()
 				setPhase("No targets, waiting...")
@@ -875,6 +875,21 @@ local function mainLoop()
 	end
 end
 
+-- M1 forever: its own loop, independent of the farm loop. It pauses while the ult is on
+-- (or Twin Fangs is running) and starts again by itself when the ult ends.
+local function m1Loop()
+	while running do
+		local c = localPlayer.Character
+		local hum = humOf(c)
+		if c and hum and hum.Health > 0 and not c:GetAttribute("Ulted") and not twinBusy then
+			click()
+			task.wait(CFG.M1_INTERVAL)
+		else
+			task.wait(0.1)
+		end
+	end
+end
+
 local function startBot()
 	if running then return end
 	running = true
@@ -889,6 +904,7 @@ local function startBot()
 	end)
 
 	task.spawn(mainLoop)
+	task.spawn(m1Loop)
 end
 
 local function stopBot()
