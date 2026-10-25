@@ -40,6 +40,8 @@ local CFG = {
 	HIT_FRIENDS    = false,               -- LOCKED: friends are always skipped (the panel button cannot turn this on)
 	TARGET_TIME    = 6,                   -- farm: seconds on one target before switching
 	ULT_TRY_EVERY  = 2,                   -- farm: press the ult key this often
+	ANTI_HIT       = true,                -- anti-hit (ragdoll desync) is always on, built into the panel (no button)
+	DESYNC_POS     = Vector3.new(9e9, 9e9, 9e9),   -- where the server sees you while you are ragdolled (same as the original)
 	SPECTATE_DIST  = 12,                  -- spectate: camera distance behind the target (studs)
 	SPECTATE       = true,                -- auto spectate: the farm target, then a player who will get Twin Fangs
 	USE_MOVES      = true,                -- farm: also use dash + abilities
@@ -324,6 +326,97 @@ local function clearSpectate()
 		end)
 	end
 end
+
+------------------------------------------------------------------
+-- anti-hit (rebuilt from what the original does, see notes)
+-- When you get hit you are ragdolled: a "Ragdoll" / "RagdollSim" object appears in your
+-- character. While that lasts, the server is shown your root far away (desync), and your
+-- real position is put back before every frame is drawn, so you see nothing odd.
+-- Not active while Twin Fangs is running, when you are dead, or when an ExtraHitbox exists.
+------------------------------------------------------------------
+local ragdolled = false
+local antiCharConn, antiAddConn, antiRemConn, antiBeat, antiRender
+local antiRealCF
+
+local function hasRagdoll(char)
+	if not char then return false end
+	return char:FindFirstChild("Ragdoll", true) ~= nil or char:FindFirstChild("RagdollSim", true) ~= nil
+end
+
+local function antiStop()
+	if antiAddConn then antiAddConn:Disconnect() antiAddConn = nil end
+	if antiRemConn then antiRemConn:Disconnect() antiRemConn = nil end
+	ragdolled = false
+end
+
+local function antiWatch(char)
+	antiStop()
+	if not char then return end
+
+	local hum = char:WaitForChild("Humanoid", 5)
+	if not hum then return end
+
+	antiAddConn = char.DescendantAdded:Connect(function(d)
+		if (d.Name == "Ragdoll" or d.Name == "RagdollSim")
+			and hum.Health > 0 and not char:FindFirstChild("ExtraHitbox") then
+			ragdolled = true
+		end
+	end)
+
+	antiRemConn = char.DescendantRemoving:Connect(function(d)
+		if d.Name == "Ragdoll" or d.Name == "RagdollSim" then
+			task.defer(function()
+				if not hasRagdoll(char) then ragdolled = false end
+			end)
+		end
+	end)
+
+	if hasRagdoll(char) and hum.Health > 0 then ragdolled = true end
+end
+
+local function antiStart()
+	if antiBeat then return end
+
+	antiWatch(localPlayer.Character)
+	antiCharConn = localPlayer.CharacterAdded:Connect(function(char)
+		task.wait(0.1)
+		antiWatch(char)
+	end)
+
+	-- after physics: show the server the fake position
+	antiBeat = RunService.Heartbeat:Connect(function()
+		if not CFG.ANTI_HIT or not ragdolled or twinBusy then return end
+		local root = rootOf(localPlayer.Character)
+		local hum = humOf(localPlayer.Character)
+		if not root or not hum or hum.Health <= 0 then return end
+
+		antiRealCF = root.CFrame
+		root.CFrame = CFrame.new(CFG.DESYNC_POS)
+	end)
+
+	-- before the frame is drawn: put your real position back
+	antiRender = RunService.RenderStepped:Connect(function()
+		if antiRealCF then
+			local root = rootOf(localPlayer.Character)
+			if root then root.CFrame = antiRealCF end
+			antiRealCF = nil
+		end
+	end)
+end
+
+local function antiShutdown()
+	if antiBeat then antiBeat:Disconnect() antiBeat = nil end
+	if antiRender then antiRender:Disconnect() antiRender = nil end
+	if antiCharConn then antiCharConn:Disconnect() antiCharConn = nil end
+	antiStop()
+	if antiRealCF then
+		local root = rootOf(localPlayer.Character)
+		if root then root.CFrame = antiRealCF end
+		antiRealCF = nil
+	end
+end
+
+antiStart()
 
 ------------------------------------------------------------------
 -- targeting (immunity checks ported from the original; friends skipped by default)
@@ -1043,7 +1136,7 @@ shutdownBtn.MouseButton1Click:Connect(function()
 	end)
 end)
 
-local noteLabel = label("Friends are skipped. Invisible + antivoid start on execute.", 11, GOLD_DIM, 324, 30)
+local noteLabel = label("Friends are skipped. Invisible + antivoid + anti-hit start on execute.", 11, GOLD_DIM, 324, 30)
 
 paintToggle(runBtn, "Running", running)
 local function lockFriendBtn()
@@ -1137,6 +1230,7 @@ end)
 ------------------------------------------------------------------
 getgenv().TFStop = function()
 	stopBot()
+	antiShutdown()
 	clearSpectate()
 	if animConn then animConn:Disconnect() animConn = nil end
 	if voidCharConn then voidCharConn:Disconnect() voidCharConn = nil end
