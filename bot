@@ -9,7 +9,7 @@
                 routine then runs when the Twin Fangs animation plays: glue to each hittable
                 player in turn until their hit animation (max PER_TARGET_MAX s), then at the
                 animation cutoff get anchored at -501y by default (no more -10000y drop).
-    3. RETURN - after RETURN_DELAY s in the void (and once the ult is over) go back to where you were.
+    3. RETURN - after RETURN_DELAY s anchored (and once the ult is over) teleport to -501y for safety (no return to the old spot).
     4. REPEAT - back to step 1.
 
   On execute it also turns ON: antivoid (void immunity) and invisibility.
@@ -51,6 +51,7 @@ local CFG = {
 	PER_TARGET_MAX = 0.4,                 -- twin fangs: max seconds per target
 	CUTOFF_TIME    = 1.85,                -- HARD limit: seconds after Twin Fangs starts, then you are anchored at -501y (default)
 	RETURN_DELAY   = 3,                   -- seconds anchored (height dropdown) before coming back
+	SAFE_Y         = -501,                -- after Twin Fangs everyone: teleport here for safety (no return to the old spot)
 	VOID_POS       = Vector3.new(0, -501, 0),   -- where you get anchored after the grab (dropdown: -501y / -777y)
 	MINX = -500, MAXX = 800, MINZ = -600, MAXZ = 700,   -- arena bounds (from the original)
 }
@@ -539,9 +540,10 @@ local function runTwinFangs(track)
 
 	poseConn:Disconnect()
 
+	-- for safety go to -555y instead of returning to where you were
 	local r2 = rootOf(localPlayer.Character)
-	if r2 and savedCF then
-		r2.CFrame = savedCF
+	if r2 then
+		r2.CFrame = CFrame.new(CFG.VOID_POS.X, CFG.SAFE_Y, CFG.VOID_POS.Z)
 		zero(r2)
 	end
 
