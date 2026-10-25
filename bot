@@ -42,6 +42,8 @@ local CFG = {
 	ULT_TRY_EVERY  = 2,                   -- farm: press the ult key this often
 	ANTI_HIT       = true,                -- anti-hit (ragdoll desync) is always on, built into the panel (no button)
 	DESYNC_POS     = Vector3.new(9e9, 9e9, 9e9),   -- where the server sees you while you are ragdolled (same as the original)
+	M1_FORCE_MOBILE = false,              -- M1: treat this device as mobile (use the on-screen M1 button)
+	M1_BUTTON_NAME = "",                  -- M1 (mobile): exact name of the M1 button if auto-detect picks the wrong one
 	M1_EXEC        = true,                -- M1: also call the executor's mouse1click when it exists
 	SPECTATE_DIST  = 12,                  -- spectate: camera distance behind the target (studs)
 	SPECTATE       = true,                -- auto spectate: the farm target, then a player who will get Twin Fangs
@@ -230,36 +232,116 @@ local function pressKey(code)
 	end)
 end
 
--- plain left mouse click (M1). Four methods per click, because the original's M1 code was not
--- in the part of the file I can read, so I can't tell which one the game listens to:
---   1) VirtualInputManager press + short hold + release at the screen center
---   2) VirtualUser Button1Down / Button1Up
---   3) Tool:Activate() when you are holding a tool
---   4) the executor's mouse1click (if it has one; set CFG.M1_EXEC = false to skip it)
-local VirtualUser = game:GetService("VirtualUser")
+-- M1.
+--   PC:     left mouse button (VirtualInputManager click at the screen center, plus the
+--           executor's mouse1click if it has one; CFG.M1_EXEC = false skips that)
+--   MOBILE: M1 is an on-screen button, so there is no mouse to click. We find that button in
+--           PlayerGui and activate it (firesignal / getconnections, or a touch on it).
+--           Mouse events are NOT sent on mobile.
+local UserInputService = game:GetService("UserInputService")
+local GuiService       = game:GetService("GuiService")
+
+local IS_MOBILE = (UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled) or CFG.M1_FORCE_MOBILE
+
+local m1Button
+local m1Warned = false
+
+local function looksLikeM1(btn)
+	local name = btn.Name:lower()
+	local text = (btn:IsA("TextButton") and btn.Text or ""):lower()
+	if CFG.M1_BUTTON_NAME ~= "" then
+		return btn.Name == CFG.M1_BUTTON_NAME
+	end
+	return name == "m1" or text == "m1"
+		or name:find("m1", 1, true) ~= nil
+		or name:find("attack", 1, true) ~= nil
+		or name:find("punch", 1, true) ~= nil
+		or name:find("lmb", 1, true) ~= nil
+		or name:find("click", 1, true) ~= nil
+end
+
+local function findM1Button()
+	if m1Button and m1Button.Parent then return m1Button end
+	m1Button = nil
+
+	local pg = localPlayer:FindFirstChild("PlayerGui")
+	if not pg then return nil end
+
+	local best, found = nil, {}
+	for _, d in ipairs(pg:GetDescendants()) do
+		if d:IsA("GuiButton") and looksLikeM1(d) then
+			table.insert(found, d:GetFullName())
+			if d.Name:lower() == "m1" then best = d end
+			best = best or d
+		end
+	end
+
+	if best then
+		m1Button = best
+		warn("[AutoTwinFangs] M1 button: " .. best:GetFullName() .. "  (" .. #found .. " candidate(s))")
+	elseif not m1Warned then
+		m1Warned = true
+		warn("[AutoTwinFangs] no M1 button found in PlayerGui - tell me what the M1 button is called (or set CFG.M1_BUTTON_NAME)")
+	end
+	return m1Button
+end
+
+local function activateButton(btn)
+	-- 1) fire the button's own signals
+	local fs = rawget(getgenv(), "firesignal")
+	if type(fs) == "function" then
+		for _, sig in ipairs({ "MouseButton1Down", "MouseButton1Click", "Activated", "MouseButton1Up" }) do
+			pcall(function() fs(btn[sig]) end)
+		end
+	end
+
+	-- 2) or call its connections directly
+	local gc = rawget(getgenv(), "getconnections")
+	if type(gc) == "function" then
+		for _, sig in ipairs({ "Activated", "MouseButton1Click", "MouseButton1Down" }) do
+			pcall(function()
+				for _, c in ipairs(gc(btn[sig])) do
+					pcall(function() c:Fire() end)
+				end
+			end)
+		end
+	end
+
+	-- 3) or a real touch on the button
+	if not fs and not gc then
+		pcall(function()
+			local inset = GuiService:GetGuiInset()
+			local gui = btn:FindFirstAncestorOfClass("ScreenGui")
+			local dy = (gui and gui.IgnoreGuiInset) and 0 or inset.Y
+			local c = btn.AbsolutePosition + btn.AbsoluteSize / 2
+			VirtualInputManager:SendTouchEvent(1, 0, c.X, c.Y + dy)
+			task.wait(0.03)
+			VirtualInputManager:SendTouchEvent(1, 2, c.X, c.Y + dy)
+		end)
+	end
+end
 
 local function click()
+	if IS_MOBILE then
+		local btn = findM1Button()
+		if btn then activateButton(btn) end
+		return
+	end
+
 	local cam = workspace.CurrentCamera
 	local size = cam and cam.ViewportSize or Vector2.new(800, 600)
 	local x, y = size.X / 2, size.Y / 2
-	local camCF = cam and cam.CFrame or CFrame.new()
 
-	pcall(function() VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0) end)
-	pcall(function() VirtualUser:Button1Down(Vector2.new(x, y), camCF) end)
-
-	local char = localPlayer.Character
-	local tool = char and char:FindFirstChildOfClass("Tool")
-	if tool then pcall(function() tool:Activate() end) end
+	pcall(function()
+		VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
+		task.wait(0.03)
+		VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
+	end)
 
 	if CFG.M1_EXEC then
 		local fn = rawget(getgenv(), "mouse1click")
 		if type(fn) == "function" then pcall(fn) end
 	end
-
-	task.wait(0.03)
-
-	pcall(function() VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0) end)
-	pcall(function() VirtualUser:Button1Up(Vector2.new(x, y), camCF) end)
 end
 
 local SLOT_KEYS = { Enum.KeyCode.One, Enum.KeyCode.Two, Enum.KeyCode.Three, Enum.KeyCode.Four }
