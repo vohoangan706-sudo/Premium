@@ -41,6 +41,9 @@ local CFG = {
 	TARGET_TIME    = 6,                   -- farm: seconds on one target before switching
 	ULT_TRY_EVERY  = 2,                   -- farm: press the ult key this often
 	ANTI_HIT       = true,                -- anti-hit (ragdoll desync) is always on, built into the panel (no button)
+	KILLSTREAK_MAX = 9,                   -- anti-killstreak: reset when you reach this many
+	KILLSTREAK_NAME = "",                -- exact name of the killstreak stat if auto-detect (anything with 'streak') fails
+	ANTI_HIT_HOLD  = 1.0,                 -- anti-hit: seconds the desync stays on after ANY health loss (even 1 hp)
 	DESYNC_POS     = Vector3.new(9e9, 9e9, 9e9),   -- where the server sees you while you are ragdolled (same as the original)
 	M1_FORCE_MOBILE = false,              -- M1: treat this device as mobile (use the on-screen M1 button)
 	M1_BUTTON_NAME = "",                  -- M1 (mobile): exact name of the M1 button if auto-detect picks the wrong one
@@ -67,6 +70,7 @@ local CFG = {
 ------------------------------------------------------------------
 local running   = false
 local twinBusy  = false
+local allowDeath = false   -- anti-killstreak: let you die even though antivoid restores health
 local stats     = { ults = 0, hits = 0 }
 local phaseText = "Idle"
 
@@ -147,7 +151,7 @@ local function hookVoid(char)
 
 	voidHealthConn = hum.HealthChanged:Connect(function(h)
 		local r = char:FindFirstChild("HumanoidRootPart")
-		if h <= 0 and r and r.CFrame.Y <= 0 then
+		if h <= 0 and r and r.CFrame.Y <= 0 and not allowDeath then
 			hum.Health = voidHealth
 		end
 	end)
@@ -438,7 +442,8 @@ end
 -- Not active while Twin Fangs is running, when you are dead, or when an ExtraHitbox exists.
 ------------------------------------------------------------------
 local ragdolled = false
-local antiCharConn, antiAddConn, antiRemConn, antiBeat, antiRender
+local antiCharConn, antiAddConn, antiRemConn, antiHealthConn, antiBeat, antiRender
+local hitUntil = 0     -- desync is on until this time after a health loss
 local antiRealCF
 
 local function hasRagdoll(char)
@@ -449,6 +454,7 @@ end
 local function antiStop()
 	if antiAddConn then antiAddConn:Disconnect() antiAddConn = nil end
 	if antiRemConn then antiRemConn:Disconnect() antiRemConn = nil end
+	if antiHealthConn then antiHealthConn:Disconnect() antiHealthConn = nil end
 	ragdolled = false
 end
 
@@ -475,6 +481,15 @@ local function antiWatch(char)
 	end)
 
 	if hasRagdoll(char) and hum.Health > 0 then ragdolled = true end
+
+	-- any health loss at all (even 1 hp) counts as being hit
+	local lastHealth = hum.Health
+	antiHealthConn = hum.HealthChanged:Connect(function(h)
+		if h < lastHealth and h > 0 then
+			hitUntil = tick() + CFG.ANTI_HIT_HOLD
+		end
+		lastHealth = h
+	end)
 end
 
 local function antiStart()
@@ -488,7 +503,8 @@ local function antiStart()
 
 	-- after physics: show the server the fake position
 	antiBeat = RunService.Heartbeat:Connect(function()
-		if not CFG.ANTI_HIT or not ragdolled or twinBusy then return end
+		if not CFG.ANTI_HIT or twinBusy then return end
+		if not ragdolled and tick() >= hitUntil then return end
 		local root = rootOf(localPlayer.Character)
 		local hum = humOf(localPlayer.Character)
 		if not root or not hum or hum.Health <= 0 then return end
@@ -520,6 +536,80 @@ local function antiShutdown()
 end
 
 antiStart()
+
+------------------------------------------------------------------
+-- anti-killstreak (panel button, starts OFF)
+-- When your killstreak reaches CFG.KILLSTREAK_MAX (9) it kills your character, over and over
+-- (health 0, dead state, joints broken, every frame) until you respawn, then it stops.
+-- The antivoid health-restore is bypassed while this runs, so it works even below Y = 0.
+-- Killstreak stat: a number in leaderstats / on you / on your character whose name contains
+-- "streak" (or exactly CFG.KILLSTREAK_NAME).
+------------------------------------------------------------------
+local antiKsOn = false
+local ksAlive = true
+local ksResetting = false
+local ksWarned = false
+
+local function isNum(v) return v:IsA("IntValue") or v:IsA("NumberValue") end
+
+local function readStreak()
+	local exact = CFG.KILLSTREAK_NAME
+	local function nameOk(n)
+		if exact ~= "" then return n == exact end
+		return n:lower():find("streak", 1, true) ~= nil
+	end
+
+	local containers = { localPlayer:FindFirstChild("leaderstats"), localPlayer, localPlayer.Character }
+	for _, c in ipairs(containers) do
+		if c then
+			for _, v in ipairs(c:GetChildren()) do
+				if isNum(v) and nameOk(v.Name) then return v.Value end
+			end
+			for n, val in pairs(c:GetAttributes()) do
+				if type(val) == "number" and nameOk(n) then return val end
+			end
+		end
+	end
+	return nil
+end
+
+local function ksReset()
+	if ksResetting then return end
+	ksResetting = true
+	allowDeath = true
+	setPhase("Anti-killstreak: resetting")
+
+	local char = localPlayer.Character
+	while antiKsOn and char and char.Parent and localPlayer.Character == char do
+		local hum = humOf(char)
+		if hum then
+			pcall(function() hum.Health = 0 end)
+			pcall(function() hum:ChangeState(Enum.HumanoidStateType.Dead) end)
+		end
+		pcall(function() char:BreakJoints() end)
+		RunService.Heartbeat:Wait()
+	end
+
+	allowDeath = false      -- respawned (or switched off): stop
+	ksResetting = false
+end
+
+task.spawn(function()
+	while ksAlive do
+		if antiKsOn and not ksResetting then
+			local streak = readStreak()
+			if streak == nil then
+				if not ksWarned then
+					ksWarned = true
+					warn("[AutoTwinFangs] anti-killstreak: no killstreak stat found - tell me its name (or set CFG.KILLSTREAK_NAME)")
+				end
+			elseif streak >= CFG.KILLSTREAK_MAX then
+				task.spawn(ksReset)
+			end
+		end
+		task.wait(0.1)
+	end
+end)
 
 ------------------------------------------------------------------
 -- targeting (immunity checks ported from the original; friends skipped by default)
@@ -1053,8 +1143,8 @@ local function round(obj, r)
 end
 
 local main = Instance.new("Frame")
-main.Size = UDim2.new(0, 270, 0, 366)
-main.Position = UDim2.new(0, 12, 1, -(366 + 60))   -- sits above the toggle button, bottom-left
+main.Size = UDim2.new(0, 270, 0, 408)
+main.Position = UDim2.new(0, 12, 1, -(408 + 60))   -- sits above the toggle button, bottom-left
 main.BackgroundColor3 = BG
 main.BorderSizePixel = 0
 main.Active = true
@@ -1204,10 +1294,19 @@ heightBtn.MouseButton1Click:Connect(function()
 	heightList.Visible = not heightList.Visible
 end)
 
+local ksBtn = mkButton(false, 282)
+ksBtn.Size = UDim2.new(1, -24, 0, 32)
+paintToggle(ksBtn, "Anti-killstreak", antiKsOn)
+ksBtn.MouseButton1Click:Connect(function()
+	antiKsOn = not antiKsOn
+	if not antiKsOn then ksWarned = false end
+	paintToggle(ksBtn, "Anti-killstreak", antiKsOn)
+end)
+
 local shutdownBtn = Instance.new("TextButton")
 shutdownBtn.Name = "Shutdown"
 shutdownBtn.Size = UDim2.new(1, -24, 0, 32)
-shutdownBtn.Position = UDim2.new(0, 12, 0, 282)
+shutdownBtn.Position = UDim2.new(0, 12, 0, 324)
 shutdownBtn.BackgroundColor3 = Color3.fromRGB(90, 20, 20)
 shutdownBtn.BorderSizePixel = 0
 shutdownBtn.Font = FONT
@@ -1254,7 +1353,7 @@ shutdownBtn.MouseButton1Click:Connect(function()
 	end)
 end)
 
-local noteLabel = label("Friends are skipped. Invisible + antivoid + anti-hit start on execute.", 11, GOLD_DIM, 324, 30)
+local noteLabel = label("Friends are skipped. Invisible + antivoid + anti-hit start on execute.", 11, GOLD_DIM, 366, 30)
 
 paintToggle(runBtn, "Running", running)
 local function lockFriendBtn()
@@ -1349,6 +1448,9 @@ end)
 getgenv().TFStop = function()
 	stopBot()
 	antiShutdown()
+	antiKsOn = false
+	ksAlive = false
+	allowDeath = false
 	clearSpectate()
 	if animConn then animConn:Disconnect() animConn = nil end
 	if voidCharConn then voidCharConn:Disconnect() voidCharConn = nil end
