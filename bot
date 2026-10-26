@@ -41,8 +41,6 @@ local CFG = {
 	TARGET_TIME    = 6,                   -- farm: seconds on one target before switching
 	ULT_TRY_EVERY  = 2,                   -- farm: press the ult key this often
 	ANTI_HIT       = true,                -- anti-hit (ragdoll desync) is always on, built into the panel (no button)
-	KILLSTREAK_MAX = 9,                   -- anti-killstreak: reset when you reach this many
-	KILLSTREAK_NAME = "",                -- exact name of the killstreak stat if auto-detect (anything with 'streak') fails
 	ANTI_HIT_HOLD  = 1.0,                 -- anti-hit: seconds the desync stays on after ANY health loss (even 1 hp)
 	DESYNC_POS     = Vector3.new(9e9, 9e9, 9e9),   -- where the server sees you while you are ragdolled (same as the original)
 	M1_FORCE_MOBILE = false,              -- M1: treat this device as mobile (use the on-screen M1 button)
@@ -70,7 +68,6 @@ local CFG = {
 ------------------------------------------------------------------
 local running   = false
 local twinBusy  = false
-local allowDeath = false   -- anti-killstreak: let you die even though antivoid restores health
 local stats     = { ults = 0, hits = 0 }
 local phaseText = "Idle"
 
@@ -151,7 +148,7 @@ local function hookVoid(char)
 
 	voidHealthConn = hum.HealthChanged:Connect(function(h)
 		local r = char:FindFirstChild("HumanoidRootPart")
-		if h <= 0 and r and r.CFrame.Y <= 0 and not allowDeath then
+		if h <= 0 and r and r.CFrame.Y <= 0 then
 			hum.Health = voidHealth
 		end
 	end)
@@ -250,6 +247,8 @@ local IS_MOBILE = (UserInputService.TouchEnabled and not UserInputService.Keyboa
 
 local m1Button
 local m1Warned = false
+local m1LastScan = 0
+local m1Logged
 
 local function looksLikeM1(btn)
 	local name = btn.Name:lower()
@@ -269,6 +268,11 @@ local function findM1Button()
 	if m1Button and m1Button.Parent then return m1Button end
 	m1Button = nil
 
+	-- scanning the whole PlayerGui is heavy: at most once a second (this was run on every click
+	-- whenever the button was missing, which made the build stutter)
+	if tick() - m1LastScan < 1 then return nil end
+	m1LastScan = tick()
+
 	local pg = localPlayer:FindFirstChild("PlayerGui")
 	if not pg then return nil end
 
@@ -283,7 +287,10 @@ local function findM1Button()
 
 	if best then
 		m1Button = best
-		warn("[AutoTwinFangs] M1 button: " .. best:GetFullName() .. "  (" .. #found .. " candidate(s))")
+		if m1Logged ~= best then
+			m1Logged = best
+			warn("[AutoTwinFangs] M1 button: " .. best:GetFullName() .. "  (" .. #found .. " candidate(s))")
+		end
 	elseif not m1Warned then
 		m1Warned = true
 		warn("[AutoTwinFangs] no M1 button found in PlayerGui - tell me what the M1 button is called (or set CFG.M1_BUTTON_NAME)")
@@ -538,92 +545,38 @@ end
 antiStart()
 
 ------------------------------------------------------------------
--- anti-killstreak (panel button, starts OFF)
--- When your killstreak reaches CFG.KILLSTREAK_MAX (9) it kills your character, over and over
--- (health 0, dead state, joints broken, every frame) until you respawn, then it stops.
--- The antivoid health-restore is bypassed while this runs, so it works even below Y = 0.
--- Killstreak stat: a number in leaderstats / on you / on your character whose name contains
--- "streak" (or exactly CFG.KILLSTREAK_NAME).
-------------------------------------------------------------------
-local antiKsOn = false
-local ksAlive = true
-local ksResetting = false
-local ksWarned = false
-
-local function isNum(v) return v:IsA("IntValue") or v:IsA("NumberValue") end
-
-local function readStreak()
-	local exact = CFG.KILLSTREAK_NAME
-	local function nameOk(n)
-		if exact ~= "" then return n == exact end
-		return n:lower():find("streak", 1, true) ~= nil
-	end
-
-	local containers = { localPlayer:FindFirstChild("leaderstats"), localPlayer, localPlayer.Character }
-	for _, c in ipairs(containers) do
-		if c then
-			for _, v in ipairs(c:GetChildren()) do
-				if isNum(v) and nameOk(v.Name) then return v.Value end
-			end
-			for n, val in pairs(c:GetAttributes()) do
-				if type(val) == "number" and nameOk(n) then return val end
-			end
-		end
-	end
-	return nil
-end
-
-local function ksReset()
-	if ksResetting then return end
-	ksResetting = true
-	allowDeath = true
-	setPhase("Anti-killstreak: resetting")
-
-	local char = localPlayer.Character
-	while antiKsOn and char and char.Parent and localPlayer.Character == char do
-		local hum = humOf(char)
-		if hum then
-			pcall(function() hum.Health = 0 end)
-			pcall(function() hum:ChangeState(Enum.HumanoidStateType.Dead) end)
-		end
-		pcall(function() char:BreakJoints() end)
-		RunService.Heartbeat:Wait()
-	end
-
-	allowDeath = false      -- respawned (or switched off): stop
-	ksResetting = false
-end
-
-task.spawn(function()
-	while ksAlive do
-		if antiKsOn and not ksResetting then
-			local streak = readStreak()
-			if streak == nil then
-				if not ksWarned then
-					ksWarned = true
-					warn("[AutoTwinFangs] anti-killstreak: no killstreak stat found - tell me its name (or set CFG.KILLSTREAK_NAME)")
-				end
-			elseif streak >= CFG.KILLSTREAK_MAX then
-				task.spawn(ksReset)
-			end
-		end
-		task.wait(0.1)
-	end
-end)
-
-------------------------------------------------------------------
 -- targeting (immunity checks ported from the original; friends skipped by default)
 ------------------------------------------------------------------
 local IMMUNE = { "ForceField", "AbsoluteImmortal", "BeingGrabbed", "HunterCounter", "AtomicCounter", "forcefield", "Counter" }
 
-local friendCache = {}
-local function isFriend(p)
-	if friendCache[p.UserId] == nil then
+-- Friend lookups are web calls that can block for a second or more, which froze the farm
+-- loop whenever a new player showed up. Now they run in the background; until the answer
+-- is known the player is treated as a friend (= skipped), so nothing ever waits.
+local friendCache, friendPending = {}, {}
+
+local function lookupFriend(p)
+	if friendPending[p.UserId] then return end
+	friendPending[p.UserId] = true
+	task.spawn(function()
 		local ok, res = pcall(function() return localPlayer:IsFriendsWith(p.UserId) end)
 		friendCache[p.UserId] = (ok and res) and true or false
-	end
-	return friendCache[p.UserId]
+		friendPending[p.UserId] = nil
+	end)
 end
+
+local function isFriend(p)
+	local v = friendCache[p.UserId]
+	if v == nil then
+		lookupFriend(p)
+		return true
+	end
+	return v
+end
+
+for _, p in ipairs(Players:GetPlayers()) do
+	if p ~= localPlayer then lookupFriend(p) end
+end
+local friendAddConn = Players.PlayerAdded:Connect(function(p) lookupFriend(p) end)
 
 local function hittable(p)
 	if p == localPlayer then return false end
@@ -1143,8 +1096,8 @@ local function round(obj, r)
 end
 
 local main = Instance.new("Frame")
-main.Size = UDim2.new(0, 270, 0, 408)
-main.Position = UDim2.new(0, 12, 1, -(408 + 60))   -- sits above the toggle button, bottom-left
+main.Size = UDim2.new(0, 270, 0, 366)
+main.Position = UDim2.new(0, 12, 1, -(366 + 60))   -- sits above the toggle button, bottom-left
 main.BackgroundColor3 = BG
 main.BorderSizePixel = 0
 main.Active = true
@@ -1294,19 +1247,10 @@ heightBtn.MouseButton1Click:Connect(function()
 	heightList.Visible = not heightList.Visible
 end)
 
-local ksBtn = mkButton(false, 282)
-ksBtn.Size = UDim2.new(1, -24, 0, 32)
-paintToggle(ksBtn, "Anti-killstreak", antiKsOn)
-ksBtn.MouseButton1Click:Connect(function()
-	antiKsOn = not antiKsOn
-	if not antiKsOn then ksWarned = false end
-	paintToggle(ksBtn, "Anti-killstreak", antiKsOn)
-end)
-
 local shutdownBtn = Instance.new("TextButton")
 shutdownBtn.Name = "Shutdown"
 shutdownBtn.Size = UDim2.new(1, -24, 0, 32)
-shutdownBtn.Position = UDim2.new(0, 12, 0, 324)
+shutdownBtn.Position = UDim2.new(0, 12, 0, 282)
 shutdownBtn.BackgroundColor3 = Color3.fromRGB(90, 20, 20)
 shutdownBtn.BorderSizePixel = 0
 shutdownBtn.Font = FONT
@@ -1353,7 +1297,7 @@ shutdownBtn.MouseButton1Click:Connect(function()
 	end)
 end)
 
-local noteLabel = label("Friends are skipped. Invisible + antivoid + anti-hit start on execute.", 11, GOLD_DIM, 366, 30)
+local noteLabel = label("Friends are skipped. Invisible + antivoid + anti-hit start on execute.", 11, GOLD_DIM, 324, 30)
 
 paintToggle(runBtn, "Running", running)
 local function lockFriendBtn()
@@ -1447,10 +1391,8 @@ end)
 ------------------------------------------------------------------
 getgenv().TFStop = function()
 	stopBot()
+	if friendAddConn then friendAddConn:Disconnect() friendAddConn = nil end
 	antiShutdown()
-	antiKsOn = false
-	ksAlive = false
-	allowDeath = false
 	clearSpectate()
 	if animConn then animConn:Disconnect() animConn = nil end
 	if voidCharConn then voidCharConn:Disconnect() voidCharConn = nil end
