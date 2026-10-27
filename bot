@@ -40,7 +40,7 @@ local CFG = {
 	HIT_FRIENDS    = false,               -- LOCKED: friends are always skipped (the panel button cannot turn this on)
 	TARGET_TIME    = 6,                   -- farm: seconds on one target before switching
 	ULT_DURATION   = 45,                  -- how long your ult lasts in seconds; 0 = learn it by itself from the first ult
-	ULT_END_LEAD   = 2,                   -- press the key this many seconds BEFORE the ult ends
+	ULT_END_LEAD   = 0,                   -- press the key this many seconds BEFORE the ult ends
 	ULT_END_KEY    = Enum.KeyCode.Four,   -- key pressed when the ult is about to end
 	ULT_TRY_EVERY  = 2,                   -- farm: press the ult key this often
 	ANTI_HIT       = true,                -- anti-hit (ragdoll desync) is always on, built into the panel (no button)
