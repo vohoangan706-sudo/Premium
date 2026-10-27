@@ -39,7 +39,7 @@ local CFG = {
 	ULT_KEY        = Enum.KeyCode.G,      -- ultimate key
 	HIT_FRIENDS    = false,               -- LOCKED: friends are always skipped (the panel button cannot turn this on)
 	TARGET_TIME    = 6,                   -- farm: seconds on one target before switching
-	ULT_DURATION   = 100,                 -- how long your ult lasts in seconds; 0 = learn it by itself from the first ult
+	ULT_DURATION   = 45,                  -- how long your ult lasts in seconds; 0 = learn it by itself from the first ult
 	ULT_END_LEAD   = 2,                   -- press the key this many seconds BEFORE the ult ends
 	ULT_END_KEY    = Enum.KeyCode.Four,   -- key pressed when the ult is about to end
 	ULT_TRY_EVERY  = 2,                   -- farm: press the ult key this often
@@ -942,6 +942,23 @@ end
 -- (so the very first ult, with nothing measured yet, gets no key press).
 local ultLearned = nil
 
+-- slot press that works on PC (keyboard) and mobile (on-screen hotbar button)
+local function pressSlotKey(code)
+	pcall(pressKey, code)
+	pcall(function()
+		local slot = tostring(({[Enum.KeyCode.One]=1,[Enum.KeyCode.Two]=2,[Enum.KeyCode.Three]=3,[Enum.KeyCode.Four]=4})[code] or "")
+		local btn = localPlayer.PlayerGui.Hotbar.Backpack.Hotbar[slot]
+		local targets = {btn, btn:FindFirstChild("Base")}
+		for _, g in ipairs(targets) do
+			if g and g:IsA("GuiButton") then
+				for _, sig in ipairs({"MouseButton1Down","MouseButton1Click","Activated","MouseButton1Up"}) do
+					if firesignal then pcall(firesignal, g[sig]) end
+				end
+			end
+		end
+	end)
+end
+
 local function ultEndLoop()
 	local prev, startT, startChar, pressed = false, 0, nil, false
 
@@ -964,7 +981,13 @@ local function ultEndLoop()
 			local dur = (CFG.ULT_DURATION and CFG.ULT_DURATION > 0) and CFG.ULT_DURATION or ultLearned
 			if dur and tick() - startT >= dur - CFG.ULT_END_LEAD then
 				pressed = true
-				task.spawn(pressKey, CFG.ULT_END_KEY)
+				setPhase("Ult ending - pressing 4")
+				task.spawn(function()
+					for _ = 1, 3 do   -- a few tries in case the first one is swallowed
+						pressSlotKey(CFG.ULT_END_KEY)
+						task.wait(0.3)
+					end
+				end)
 			end
 		end
 
