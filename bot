@@ -39,6 +39,9 @@ local CFG = {
 	ULT_KEY        = Enum.KeyCode.G,      -- ultimate key
 	HIT_FRIENDS    = false,               -- LOCKED: friends are always skipped (the panel button cannot turn this on)
 	TARGET_TIME    = 6,                   -- farm: seconds on one target before switching
+	ULT_DURATION   = 100,                 -- how long your ult lasts in seconds; 0 = learn it by itself from the first ult
+	ULT_END_LEAD   = 2,                   -- press the key this many seconds BEFORE the ult ends
+	ULT_END_KEY    = Enum.KeyCode.Four,   -- key pressed when the ult is about to end
 	ULT_TRY_EVERY  = 2,                   -- farm: press the ult key this often
 	ANTI_HIT       = true,                -- anti-hit (ragdoll desync) is always on, built into the panel (no button)
 	ANTI_HIT_HOLD  = 1.0,                 -- anti-hit: seconds the desync stays on after ANY health loss (even 1 hp)
@@ -933,6 +936,43 @@ local function m1Loop()
 	end
 end
 
+-- ult about to end -> press key 4.
+-- The game only tells us "Ulted" is on or off, not the time left, so it uses the ult length:
+-- CFG.ULT_DURATION if you set it, otherwise the length it measured on the previous ult
+-- (so the very first ult, with nothing measured yet, gets no key press).
+local ultLearned = nil
+
+local function ultEndLoop()
+	local prev, startT, startChar, pressed = false, 0, nil, false
+
+	while running do
+		local c = localPlayer.Character
+		local ulted = (c and c:GetAttribute("Ulted")) and true or false
+
+		if ulted and not prev then
+			startT, startChar, pressed = tick(), c, false
+		elseif prev and not ulted then
+			-- ult ended: remember how long it lasted (only if same character, still alive, not cut short)
+			local hum = humOf(c)
+			local dur = tick() - startT
+			if c == startChar and hum and hum.Health > 0 and dur >= 3 then
+				ultLearned = dur
+			end
+		end
+
+		if ulted and not pressed then
+			local dur = (CFG.ULT_DURATION and CFG.ULT_DURATION > 0) and CFG.ULT_DURATION or ultLearned
+			if dur and tick() - startT >= dur - CFG.ULT_END_LEAD then
+				pressed = true
+				task.spawn(pressKey, CFG.ULT_END_KEY)
+			end
+		end
+
+		prev = ulted
+		task.wait(0.05)
+	end
+end
+
 local function startBot()
 	if running then return end
 	running = true
@@ -948,6 +988,7 @@ local function startBot()
 
 	task.spawn(mainLoop)
 	task.spawn(m1Loop)
+	task.spawn(ultEndLoop)
 end
 
 local function stopBot()
