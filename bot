@@ -42,39 +42,6 @@ local CFG = {
 	ULT_TRY_EVERY  = 2,                   -- farm: press the ult key this often
 	ANTI_HIT       = true,                -- anti-hit (ragdoll desync) is always on, built into the panel (no button)
 	ANTI_HIT_HOLD  = 1.0,                 -- anti-hit: seconds the desync stays on after ANY health loss (even 1 hp)
-	PREDICT        = true,                -- anti-hit predict: desync when a nearby enemy STARTS an attack animation
-	PREDICT_RANGE  = 10,                  -- predict: only enemies within this many studs
-	PREDICT_WINDOW = 0.35,                -- predict: default seconds of desync after the attack animation starts
-	-- attack animation ids to react to: ["id"] = window in seconds (true = use PREDICT_WINDOW).
-	-- ids you gave me (duplicates and the invalid 'qq' entry removed); all use PREDICT_WINDOW.
-	ATTACK_ANIMS   = {
-		["12832505612"] = true,
-		["10468665991"] = true,
-		["13560306510"] = true,
-		["10471336737"] = true,
-		["12510170988"] = true,
-		["12983333733"] = true,
-		["18435303746"] = true,
-		["11343318134"] = true,
-		["13532562418"] = true,
-		["13532600125"] = true,
-		["17889458563"] = true,
-		["17889290569"] = true,
-		["10469493270"] = true,
-		["10469630950"] = true,
-		["10469639222"] = true,
-		["10469643643"] = true,
-		["10466974800"] = true,
-		["11365563255"] = true,
-		["16699717165"] = true,
-		["13073745835"] = true,
-		["13603396939"] = true,
-		["12273188754"] = true,
-		["17861840167"] = true,
-		["77727115892579"] = true,
-		["12351854556"] = true,
-		["78521642007560"] = true,
-	},
 	DESYNC_POS     = Vector3.new(9e9, 9e9, 9e9),   -- where the server sees you while you are ragdolled (same as the original)
 	M1_FORCE_MOBILE = false,              -- M1: treat this device as mobile (use the on-screen M1 button)
 	M1_BUTTON_NAME = "",                  -- M1 (mobile): exact name of the M1 button if auto-detect picks the wrong one
@@ -484,7 +451,6 @@ end
 local ragdolled = false
 local antiCharConn, antiAddConn, antiRemConn, antiHealthConn, antiBeat, antiRender
 local hitUntil = 0     -- desync is on until this time after a health loss
-local predictUntil = 0 -- desync is on until this time after an enemy attack animation started
 local antiRealCF
 
 local function hasRagdoll(char)
@@ -545,7 +511,7 @@ local function antiStart()
 	-- after physics: show the server the fake position
 	antiBeat = RunService.Heartbeat:Connect(function()
 		if not CFG.ANTI_HIT or twinBusy then return end
-		if not ragdolled and tick() >= hitUntil and tick() >= predictUntil then return end
+		if not ragdolled and tick() >= hitUntil then return end
 		local root = rootOf(localPlayer.Character)
 		local hum = humOf(localPlayer.Character)
 		if not root or not hum or hum.Health <= 0 then return end
@@ -611,49 +577,6 @@ for _, p in ipairs(Players:GetPlayers()) do
 	if p ~= localPlayer then lookupFriend(p) end
 end
 local friendAddConn = Players.PlayerAdded:Connect(function(p) lookupFriend(p) end)
-
-------------------------------------------------------------------
--- anti-hit PREDICT: react when an enemy STARTS an attack animation, before the hit lands.
--- Uses CFG.ATTACK_ANIMS. Same desync as the anti-hit (9e9), only for the wind-up window,
--- only for non-friends within PREDICT_RANGE, and never while Twin Fangs runs.
-------------------------------------------------------------------
-local predictConns = {}
-
-local function predictHook(player, char)
-	local hum = char:WaitForChild("Humanoid", 5)
-	if not hum then return end
-	local animator = hum:FindFirstChildOfClass("Animator") or hum:WaitForChild("Animator", 5)
-
-	table.insert(predictConns, (animator or hum).AnimationPlayed:Connect(function(track)
-		if not CFG.PREDICT or not CFG.ANTI_HIT then return end
-
-		local id = track.Animation.AnimationId:match("%d+")
-		local entry = id and CFG.ATTACK_ANIMS[id]
-		if not entry then return end
-		if isFriend(player) then return end
-
-		local myRoot = rootOf(localPlayer.Character)
-		local theirRoot = rootOf(char)
-		if not myRoot or not theirRoot then return end
-		if (myRoot.Position - theirRoot.Position).Magnitude > CFG.PREDICT_RANGE then return end
-
-		local window = (type(entry) == "number") and entry or CFG.PREDICT_WINDOW
-		predictUntil = math.max(predictUntil, tick() + window)
-	end))
-end
-
-local function predictPlayer(p)
-	if p == localPlayer then return end
-	if p.Character then task.spawn(predictHook, p, p.Character) end
-	table.insert(predictConns, p.CharacterAdded:Connect(function(c) predictHook(p, c) end))
-end
-
-for _, p in ipairs(Players:GetPlayers()) do predictPlayer(p) end
-table.insert(predictConns, Players.PlayerAdded:Connect(predictPlayer))
-
-if next(CFG.ATTACK_ANIMS) == nil then
-	warn("[AutoTwinFangs] anti-hit predict: ATTACK_ANIMS is empty, so it does nothing yet (add attack animation ids)")
-end
 
 local function hittable(p)
 	if p == localPlayer then return false end
@@ -1470,9 +1393,6 @@ getgenv().TFStop = function()
 	stopBot()
 	if friendAddConn then friendAddConn:Disconnect() friendAddConn = nil end
 	antiShutdown()
-	for _, c in ipairs(predictConns) do pcall(function() c:Disconnect() end) end
-	predictConns = {}
-	predictUntil = 0
 	clearSpectate()
 	if animConn then animConn:Disconnect() animConn = nil end
 	if voidCharConn then voidCharConn:Disconnect() voidCharConn = nil end
