@@ -2,8 +2,9 @@
   DUEL FARM  (own panel, starts as soon as you execute it)  -  NO ult building
 
   Loop (whenever slot 3 is off cooldown and there is someone to hit):
-    press 3  >  wait 0.2s  >  glue (PhysicsRepRootPart) to the other players for exactly 1.2s in
-    total (split evenly)  >  anchored at -10000y  >  RETURN_DELAY s later teleport to -500y.
+    press 3  >  wait 0.4s  >  glue (PhysicsRepRootPart) to the other players for exactly 0.7s in
+    total (split evenly)  >  anchored at -501y for 0.3s  >  anchored at -10000y for RETURN_DELAY s  >
+    teleport to -500y.
 
   No M1, no ult key, no dash/moves. Friends are never targeted.
   Invisibility, antivoid and anti-hit start on execute.
@@ -25,10 +26,12 @@ local CFG = {
 	HIT_FRIENDS    = false,               -- LOCKED: friends are always skipped
 	TARGET_TIME    = 6,                   -- farm: seconds on one target before switching
 	DUEL_KEY       = Enum.KeyCode.Three,  -- duel move (slot 3)
-	DUEL_WAIT      = 0.2,                 -- seconds between pressing the duel key and the glue
+	DUEL_WAIT      = 0.4,                 -- seconds between pressing the duel key and the glue
 	DUEL_GAP       = 2,                   -- minimum seconds between two duels
-	DUEL_TIME      = 1.2,                 -- EXACT seconds of glue on the other players, split evenly
-	VOID_POS       = Vector3.new(0, -10000, 0),   -- anchored here after the glue
+	DUEL_TIME      = 0.7,                 -- EXACT seconds of glue on the other players, split evenly
+	HOLD_POS       = Vector3.new(0, -501, 0),     -- anchored here first, right after the glue
+	HOLD_TIME      = 0.3,                 -- seconds anchored at -501y
+	VOID_POS       = Vector3.new(0, -10000, 0),   -- then anchored here
 	RETURN_DELAY   = 3,                   -- seconds anchored before coming back
 	RETURN_POS     = Vector3.new(0, -500, 0),     -- where you come back to
 	ANTI_HIT       = true,                -- anti-hit (ragdoll desync) is always on, built in (no button)
@@ -38,8 +41,6 @@ local CFG = {
 	M1_BUTTON_NAME = "",                  -- M1 (mobile): exact name of the M1 button if auto-detect picks the wrong one
 	M1_INTERVAL    = 0.05,                -- M1: seconds between clicks (clicks forever, paused only during the ult)
 	M1_EXEC        = true,                -- M1: also call the executor's mouse1click when it exists
-	SPECTATE_DIST  = 12,                  -- spectate: camera distance behind the target (studs)
-	SPECTATE       = true,                -- auto spectate: the farm target, then the first duel target
 	MINX = -500, MAXX = 800, MINZ = -600, MAXZ = 700,   -- arena bounds (farm targets only)
 }
 
@@ -364,78 +365,7 @@ local function pressSlotKey(code)
 	end)
 end
 
-------------------------------------------------------------------
--- auto spectate
--- Re-applied every frame AFTER the game's camera script (BindToRenderStep at Camera+1),
--- so the game / your own character can't pull the camera back.
-------------------------------------------------------------------
-local specPlayer
-local specBeat, specRender
-local plannedQueue          -- players picked in advance to get Twin Fangs (spectated during the ult)
-
--- We drive the camera CFrame ourselves (Scriptable) instead of only changing CameraSubject:
--- if the game's camera script doesn't follow CameraSubject, the camera just never moved.
-local function specApply()
-	local cam = workspace.CurrentCamera
-	if not cam then return end
-
-	local char = specPlayer and specPlayer.Character
-	local hrp = char and rootOf(char)
-	if not hrp or not hrp.Parent then
-		-- target gone: hand the camera back to your own character
-		local own = humOf(localPlayer.Character)
-		if own then
-			if cam.CameraType ~= Enum.CameraType.Custom then cam.CameraType = Enum.CameraType.Custom end
-			if cam.CameraSubject ~= own then cam.CameraSubject = own end
-		end
-		return
-	end
-
-	local hum = humOf(char)
-	if hum and cam.CameraSubject ~= hum then cam.CameraSubject = hum end
-	if cam.CameraType ~= Enum.CameraType.Scriptable then cam.CameraType = Enum.CameraType.Scriptable end
-
-	local focus = hrp.Position + Vector3.new(0, 2, 0)
-	local pos = focus - hrp.CFrame.LookVector * CFG.SPECTATE_DIST + Vector3.new(0, 5, 0)
-	cam.CFrame = CFrame.lookAt(pos, focus)
-end
-
-local function unbindSpec()
-	pcall(function() RunService:UnbindFromRenderStep("DFSpectate") end)
-	if specBeat   then specBeat:Disconnect()   specBeat   = nil end
-	if specRender then specRender:Disconnect() specRender = nil end
-end
-
-local function setSpectate(player)
-	if not CFG.SPECTATE or not player or player == localPlayer then return end
-	if specPlayer == player and specBeat then return end
-	specPlayer = player
-
-	unbindSpec()
-	-- three layers so the game can't win: last in the render step, plus RenderStepped and Heartbeat
-	local okBind = pcall(function()
-		RunService:BindToRenderStep("DFSpectate", 99999, specApply)   -- far after Last (2000): nothing else can run after us
-	end)
-	if not okBind then
-		specRender = RunService.RenderStepped:Connect(specApply)
-	end
-	specBeat = RunService.Heartbeat:Connect(specApply)
-	specApply()
-end
-
-local function clearSpectate()
-	specPlayer = nil
-	unbindSpec()
-
-	local cam = workspace.CurrentCamera
-	local hum = humOf(localPlayer.Character)
-	if cam and hum then
-		pcall(function()
-			cam.CameraSubject = hum
-			cam.CameraType = Enum.CameraType.Custom
-		end)
-	end
-end
+local plannedQueue          -- players picked in advance (kept in a list so the duel starts without a lookup)
 
 ------------------------------------------------------------------
 -- anti-hit (rebuilt from what the original does, see notes)
@@ -706,17 +636,29 @@ local function runDuel()
 	unlink()
 	keepVel = false
 
-	-- anchored at -10000y (zero velocity every Heartbeat)
-	setPhase("Anchored at " .. math.floor(CFG.VOID_POS.Y + 0.5) .. "y")
+	-- stage 1: anchored at -501y for HOLD_TIME (zero velocity every Heartbeat)
+	local anchorPos = CFG.HOLD_POS
 	local function pose()
 		local r = rootOf(localPlayer.Character)
 		if not r then return end
 		r.AssemblyLinearVelocity  = Vector3.zero
 		r.AssemblyAngularVelocity = Vector3.zero
-		r.CFrame = CFrame.new(CFG.VOID_POS)
+		r.CFrame = CFrame.new(anchorPos)
 	end
+	setPhase("Anchored at " .. math.floor(CFG.HOLD_POS.Y + 0.5) .. "y")
+	ensurePlatform(CFG.HOLD_POS)
 	pose()
 	local poseConn = RunService.Heartbeat:Connect(pose)
+
+	local t0 = tick()
+	while running and tick() - t0 < CFG.HOLD_TIME do
+		RunService.Heartbeat:Wait()
+	end
+
+	-- stage 2: anchored at -10000y for RETURN_DELAY
+	anchorPos = CFG.VOID_POS
+	setPhase("Anchored at " .. math.floor(CFG.VOID_POS.Y + 0.5) .. "y")
+	pose()
 
 	local t1 = tick()
 	while running and tick() - t1 < CFG.RETURN_DELAY do
@@ -724,7 +666,7 @@ local function runDuel()
 	end
 	poseConn:Disconnect()
 
-	-- come back at -500y (glass floor there so you don't fall)
+	-- stage 3: come back at -500y (glass floor there so you don't fall)
 	ensurePlatform(CFG.RETURN_POS)
 	local r2 = rootOf(localPlayer.Character)
 	if r2 then
@@ -767,9 +709,6 @@ local function mainLoop()
 				return
 			end
 
-			-- spectate one single target
-			setSpectate(plannedQueue[1])
-
 			setPhase("Duel: pressing 3")
 			pressSlotKey(CFG.DUEL_KEY)
 			task.wait(CFG.DUEL_WAIT)
@@ -795,7 +734,6 @@ local function stopBot()
 	running = false
 	unlink()
 	restoreHome()
-	clearSpectate()
 	setPhase("Stopped")
 end
 
@@ -1129,18 +1067,6 @@ task.spawn(function()
 		paintToggle(runBtn, "Running", running)
 		paintToggle(invisBtn, "Invisible", invisOn)
 		lockFriendBtn()
-		do
-			local cam = workspace.CurrentCamera
-			local thrp = specPlayer and rootOf(specPlayer.Character)
-			if specPlayer and cam and thrp then
-				noteLabel.Text = string.format("Spectating: %s | cam: %s | dist: %.0f",
-					specPlayer.DisplayName, tostring(cam.CameraType):gsub("Enum.CameraType.", ""), (cam.CFrame.Position - thrp.Position).Magnitude)
-			elseif specPlayer then
-				noteLabel.Text = "Spectating: " .. specPlayer.DisplayName .. " (no body yet)"
-			else
-				noteLabel.Text = "Spectate: idle (starts when it picks a target)"
-			end
-		end
 		task.wait(0.3)
 	end
 end)
@@ -1152,7 +1078,6 @@ getgenv().DFStop = function()
 	stopBot()
 	if friendAddConn then friendAddConn:Disconnect() friendAddConn = nil end
 	antiShutdown()
-	clearSpectate()
 	if voidCharConn then voidCharConn:Disconnect() voidCharConn = nil end
 	if voidHealthConn then voidHealthConn:Disconnect() voidHealthConn = nil end
 	if voidFollowConn then voidFollowConn:Disconnect() voidFollowConn = nil end
