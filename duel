@@ -34,7 +34,7 @@ local CFG = {
 	DUEL_KEY       = Enum.KeyCode.Three,  -- duel move (slot 3)
 	DUEL_WAIT      = 0.4,                 -- seconds between pressing the duel key and the glue
 	RETURN_EARLY   = 0.5,                 -- go back to the saved spot this many seconds BEFORE slot 3 comes off cooldown
-	DUEL_COOLDOWN  = 19.5,                  -- slot 3 cooldown in seconds; 0 = read it from the hotbar / learn it from the first duel
+	DUEL_COOLDOWN  = 20.5,                  -- slot 3 cooldown in seconds; 0 = read it from the hotbar / learn it from the first duel
 	DUEL_GAP       = 2,                   -- minimum seconds between two duels
 	DUEL_TIME      = 0.7,                 -- EXACT seconds of glue on the other players, split evenly
 	HOLD_POS       = Vector3.new(0, -501, 0),     -- anchored here first, right after the glue
