@@ -683,6 +683,8 @@ end
 -- phases
 ------------------------------------------------------------------
 local lastDuel = 0
+local homeCF, away = nil, false   -- your spot before the duel; away = you are sitting at -500y
+
 
 local function mainLoop()
 	while running do
@@ -691,6 +693,7 @@ local function mainLoop()
 			local hum, root = humOf(char), rootOf(char)
 
 			if not hum or not root or hum.Health <= 0 then
+				homeCF, away = nil, false   -- new body: forget the old spot
 				setPhase("Waiting to spawn...")
 				task.wait(0.5)
 				return
@@ -709,10 +712,20 @@ local function mainLoop()
 				return
 			end
 
+			-- off cooldown: go back to the old spot first, then continue with the duel
+			if away and homeCF then
+				root.CFrame = homeCF
+				zero(root)
+				task.wait(0.1)
+			end
+			away = false
+			homeCF = root.CFrame
+
 			setPhase("Duel: pressing 3")
 			pressSlotKey(CFG.DUEL_KEY)
 			task.wait(CFG.DUEL_WAIT)
 			runDuel()
+			away = true
 			lastDuel = tick()
 		end)
 
