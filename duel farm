@@ -1,0 +1,1170 @@
+--[[
+  DUEL FARM  (own panel, starts as soon as you execute it)  -  NO ult building
+
+  Loop (whenever slot 3 is off cooldown and there is someone to hit):
+    press 3  >  wait 0.2s  >  glue (PhysicsRepRootPart) to the other players for exactly 1.2s in
+    total (split evenly)  >  anchored at -10000y  >  RETURN_DELAY s later teleport to -500y.
+
+  No M1, no ult key, no dash/moves. Friends are never targeted.
+  Invisibility, antivoid and anti-hit start on execute.
+  Needs an executor with: getgenv, sethiddenproperty, VirtualInputManager access.
+]]
+
+if getgenv().DFStop then pcall(getgenv().DFStop) end   -- re-run safe
+
+local Players             = game:GetService("Players")
+local RunService          = game:GetService("RunService")
+local HttpService         = game:GetService("HttpService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local localPlayer         = Players.LocalPlayer
+
+------------------------------------------------------------------
+-- settings
+------------------------------------------------------------------
+local CFG = {
+	HIT_FRIENDS    = false,               -- LOCKED: friends are always skipped
+	TARGET_TIME    = 6,                   -- farm: seconds on one target before switching
+	DUEL_KEY       = Enum.KeyCode.Three,  -- duel move (slot 3)
+	DUEL_WAIT      = 0.2,                 -- seconds between pressing the duel key and the glue
+	DUEL_GAP       = 2,                   -- minimum seconds between two duels
+	DUEL_TIME      = 1.2,                 -- EXACT seconds of glue on the other players, split evenly
+	VOID_POS       = Vector3.new(0, -10000, 0),   -- anchored here after the glue
+	RETURN_DELAY   = 3,                   -- seconds anchored before coming back
+	RETURN_POS     = Vector3.new(0, -500, 0),     -- where you come back to
+	ANTI_HIT       = true,                -- anti-hit (ragdoll desync) is always on, built in (no button)
+	ANTI_HIT_HOLD  = 1.0,                 -- anti-hit: seconds the desync stays on after ANY health loss (even 1 hp)
+	DESYNC_POS     = Vector3.new(9e9, 9e9, 9e9),
+	M1_FORCE_MOBILE = false,              -- M1: treat this device as mobile (use the on-screen M1 button)
+	M1_BUTTON_NAME = "",                  -- M1 (mobile): exact name of the M1 button if auto-detect picks the wrong one
+	M1_INTERVAL    = 0.05,                -- M1: seconds between clicks (clicks forever, paused only during the ult)
+	M1_EXEC        = true,                -- M1: also call the executor's mouse1click when it exists
+	SPECTATE_DIST  = 12,                  -- spectate: camera distance behind the target (studs)
+	SPECTATE       = true,                -- auto spectate: the farm target, then the first duel target
+	MINX = -500, MAXX = 800, MINZ = -600, MAXZ = 700,   -- arena bounds (farm targets only)
+}
+
+------------------------------------------------------------------
+-- state
+------------------------------------------------------------------
+local running   = false
+local twinBusy  = false
+local stats     = { ults = 0, hits = 0 }
+local phaseText = "Idle"
+
+local function setPhase(t)
+	phaseText = t
+end
+
+------------------------------------------------------------------
+-- small helpers
+------------------------------------------------------------------
+local function zero(part)
+	part.AssemblyLinearVelocity  = Vector3.zero
+	part.AssemblyAngularVelocity = Vector3.zero
+	pcall(function() part.Velocity    = Vector3.zero end)
+	pcall(function() part.RotVelocity = Vector3.zero end)
+end
+
+local function setRep(part, value)
+	if sethiddenproperty and part and part.Parent then
+		pcall(function() sethiddenproperty(part, "PhysicsRepRootPart", value) end)
+	end
+end
+
+local function rootOf(c) return c and c:FindFirstChild("HumanoidRootPart") end
+local function humOf(c)  return c and c:FindFirstChildOfClass("Humanoid") end
+
+local function hasAnim(hum, id)
+	for _, tr in ipairs(hum:GetPlayingAnimationTracks()) do
+		if tr.Animation.AnimationId:match(id) then
+			return true
+		end
+	end
+	return false
+end
+
+------------------------------------------------------------------
+-- void immunity (ported from the original)
+------------------------------------------------------------------
+workspace.FallenPartsDestroyHeight = (0/0)
+
+local fallenConn = workspace:GetPropertyChangedSignal("FallenPartsDestroyHeight"):Connect(function()
+	local h = workspace.FallenPartsDestroyHeight
+	if h == h then
+		workspace.FallenPartsDestroyHeight = (0/0)
+	end
+end)
+
+local voidPart = Instance.new("Part")
+voidPart.Name = HttpService:GenerateGUID()
+voidPart.CFrame = CFrame.new(0, -10008, 0)
+voidPart.Anchored = true
+voidPart.Size = Vector3.new(2048, 10, 2048)
+voidPart.Transparency = 0.5
+voidPart.CanCollide = true
+voidPart.Parent = workspace
+
+local voidHealth = 100
+local voidHealthConn, voidFollowConn
+
+local function hookVoid(char)
+	if not char then return end
+	local hum  = char:FindFirstChildOfClass("Humanoid") or char:WaitForChild("Humanoid", 3)
+	local root = char:FindFirstChild("HumanoidRootPart") or char:WaitForChild("HumanoidRootPart", 3)
+	if not hum or not root then return end
+
+	voidHealth = hum.Health
+
+	if voidHealthConn then voidHealthConn:Disconnect() voidHealthConn = nil end
+	if voidFollowConn then voidFollowConn:Disconnect() voidFollowConn = nil end
+
+	voidFollowConn = RunService.RenderStepped:Connect(function()
+		local r = char:FindFirstChild("HumanoidRootPart")
+		if r then
+			voidHealth = hum.Health
+			voidPart.CFrame = CFrame.new(r.Position.X, -10008, r.Position.Z)
+		end
+	end)
+
+	voidHealthConn = hum.HealthChanged:Connect(function(h)
+		local r = char:FindFirstChild("HumanoidRootPart")
+		if h <= 0 and r and r.CFrame.Y <= 0 then
+			hum.Health = voidHealth
+		end
+	end)
+end
+
+task.spawn(hookVoid, localPlayer.Character)
+
+local voidCharConn = localPlayer.CharacterAdded:Connect(function(char)
+	task.wait(0.1)
+	hookVoid(char)
+end)
+
+------------------------------------------------------------------
+-- glue (PhysicsRepRootPart link)
+------------------------------------------------------------------
+local linkMy, linkTheir
+local linkBeat, linkRot
+local glueHome, glueHomeRoot   -- where you stood before the glue first moved you to (0,0,5)
+
+local function unlink()
+	if linkBeat then linkBeat:Disconnect() linkBeat = nil end
+	if linkRot  then linkRot:Disconnect()  linkRot  = nil end
+
+	setRep(linkMy, nil)
+	setRep(linkTheir, nil)
+
+	if linkMy and linkMy.Parent then
+		linkMy.CFrame = CFrame.new(linkMy.Position)
+		zero(linkMy)
+		local hum = linkMy.Parent:FindFirstChildOfClass("Humanoid")
+		if hum then pcall(function() hum.AutoRotate = true end) end
+	end
+
+	linkMy, linkTheir = nil, nil
+end
+
+-- put you back where you were before the farm glue moved you (used on stop / shutdown)
+local function restoreHome()
+	local root = rootOf(localPlayer.Character)
+	if root and glueHome and glueHomeRoot == root then
+		root.CFrame = glueHome
+		zero(root)
+	end
+	glueHome, glueHomeRoot = nil, nil
+end
+
+local function link(a, b, hum)
+	unlink()
+	if not running then return end   -- stopped / shutting down: never (re)glue, or you stay stuck at (0,0,5)
+	if not glueHome or glueHomeRoot ~= a then glueHome, glueHomeRoot = a.CFrame, a end
+	linkMy, linkTheir = a, b
+
+	if hum then
+		linkRot = RunService.RenderStepped:Connect(function()
+			if hum.Parent then pcall(function() hum.AutoRotate = false end) end
+		end)
+	end
+
+	a.CFrame = CFrame.new(0, 0, 5)
+	zero(a)
+	setRep(a, a)
+	setRep(a, b)
+
+	linkBeat = RunService.Heartbeat:Connect(function()
+		if not a.Parent or not b.Parent then
+			unlink()
+			return
+		end
+		a.CFrame = CFrame.new(0, 0, 5)
+		zero(a)
+		setRep(a, b)
+	end)
+end
+
+------------------------------------------------------------------
+-- input
+------------------------------------------------------------------
+local function pressKey(code)
+	pcall(function()
+		VirtualInputManager:SendKeyEvent(true, code, false, game)
+		task.wait(0.05)
+		VirtualInputManager:SendKeyEvent(false, code, false, game)
+	end)
+end
+
+-- M1.
+--   PC:     left mouse button (VirtualInputManager click at the screen center, plus the
+--           executor's mouse1click if it has one; CFG.M1_EXEC = false skips that)
+--   MOBILE: M1 is an on-screen button, so there is no mouse to click. We find that button in
+--           PlayerGui and activate it (firesignal / getconnections, or a touch on it).
+--           Mouse events are NOT sent on mobile.
+local UserInputService = game:GetService("UserInputService")
+local GuiService       = game:GetService("GuiService")
+
+local IS_MOBILE = (UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled) or CFG.M1_FORCE_MOBILE
+
+local m1Button
+local m1Warned = false
+local m1LastScan = 0
+local m1Logged
+
+local function looksLikeM1(btn)
+	local name = btn.Name:lower()
+	local text = (btn:IsA("TextButton") and btn.Text or ""):lower()
+	if CFG.M1_BUTTON_NAME ~= "" then
+		return btn.Name == CFG.M1_BUTTON_NAME
+	end
+	return name == "m1" or text == "m1"
+		or name:find("m1", 1, true) ~= nil
+		or name:find("attack", 1, true) ~= nil
+		or name:find("punch", 1, true) ~= nil
+		or name:find("lmb", 1, true) ~= nil
+		or name:find("click", 1, true) ~= nil
+end
+
+local function findM1Button()
+	if m1Button and m1Button.Parent then return m1Button end
+	m1Button = nil
+
+	-- scanning the whole PlayerGui is heavy: at most once a second (this was run on every click
+	-- whenever the button was missing, which made the build stutter)
+	if tick() - m1LastScan < 1 then return nil end
+	m1LastScan = tick()
+
+	local pg = localPlayer:FindFirstChild("PlayerGui")
+	if not pg then return nil end
+
+	local best, found = nil, {}
+	for _, d in ipairs(pg:GetDescendants()) do
+		if d:IsA("GuiButton") and looksLikeM1(d) then
+			table.insert(found, d:GetFullName())
+			if d.Name:lower() == "m1" then best = d end
+			best = best or d
+		end
+	end
+
+	if best then
+		m1Button = best
+		if m1Logged ~= best then
+			m1Logged = best
+			warn("[DuelFarm] M1 button: " .. best:GetFullName() .. "  (" .. #found .. " candidate(s))")
+		end
+	elseif not m1Warned then
+		m1Warned = true
+		warn("[DuelFarm] no M1 button found in PlayerGui - tell me what the M1 button is called (or set CFG.M1_BUTTON_NAME)")
+	end
+	return m1Button
+end
+
+local function activateButton(btn)
+	-- 1) fire the button's own signals
+	local fs = rawget(getgenv(), "firesignal")
+	if type(fs) == "function" then
+		for _, sig in ipairs({ "MouseButton1Down", "MouseButton1Click", "Activated", "MouseButton1Up" }) do
+			pcall(function() fs(btn[sig]) end)
+		end
+	end
+
+	-- 2) or call its connections directly
+	local gc = rawget(getgenv(), "getconnections")
+	if type(gc) == "function" then
+		for _, sig in ipairs({ "Activated", "MouseButton1Click", "MouseButton1Down" }) do
+			pcall(function()
+				for _, c in ipairs(gc(btn[sig])) do
+					pcall(function() c:Fire() end)
+				end
+			end)
+		end
+	end
+
+	-- 3) or a real touch on the button
+	if not fs and not gc then
+		pcall(function()
+			local inset = GuiService:GetGuiInset()
+			local gui = btn:FindFirstAncestorOfClass("ScreenGui")
+			local dy = (gui and gui.IgnoreGuiInset) and 0 or inset.Y
+			local c = btn.AbsolutePosition + btn.AbsoluteSize / 2
+			VirtualInputManager:SendTouchEvent(1, 0, c.X, c.Y + dy)
+			task.wait(0.03)
+			VirtualInputManager:SendTouchEvent(1, 2, c.X, c.Y + dy)
+		end)
+	end
+end
+
+local function click()
+	if IS_MOBILE then
+		local btn = findM1Button()
+		if btn then activateButton(btn) end
+		return
+	end
+
+	local cam = workspace.CurrentCamera
+	local size = cam and cam.ViewportSize or Vector2.new(800, 600)
+	local x, y = size.X / 2, size.Y / 2
+
+	pcall(function()
+		VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
+		task.wait(0.03)
+		VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
+	end)
+
+	if CFG.M1_EXEC then
+		local fn = rawget(getgenv(), "mouse1click")
+		if type(fn) == "function" then pcall(fn) end
+	end
+end
+
+local SLOT_KEYS = { Enum.KeyCode.One, Enum.KeyCode.Two, Enum.KeyCode.Three, Enum.KeyCode.Four }
+
+-- a hotbar slot shows a "Cooldown" child under Base while it is cooling down
+local function moveReady(slot)
+	local ok, ready = pcall(function()
+		local base = localPlayer.PlayerGui.Hotbar.Backpack.Hotbar[tostring(slot)].Base
+		return base:FindFirstChild("Cooldown") == nil
+	end)
+	if ok then return ready end
+	return true   -- hotbar not found: just try it
+end
+
+-- slot press that works on PC (keyboard) and mobile (on-screen hotbar button)
+local function pressSlotKey(code)
+	pcall(pressKey, code)
+	pcall(function()
+		local slot = tostring(({[Enum.KeyCode.One]=1,[Enum.KeyCode.Two]=2,[Enum.KeyCode.Three]=3,[Enum.KeyCode.Four]=4})[code] or "")
+		local btn = localPlayer.PlayerGui.Hotbar.Backpack.Hotbar[slot]
+		for _, g in ipairs({btn, btn:FindFirstChild("Base")}) do
+			if g and g:IsA("GuiButton") then
+				for _, sig in ipairs({"MouseButton1Down","MouseButton1Click","Activated","MouseButton1Up"}) do
+					if firesignal then pcall(firesignal, g[sig]) end
+				end
+			end
+		end
+	end)
+end
+
+------------------------------------------------------------------
+-- auto spectate
+-- Re-applied every frame AFTER the game's camera script (BindToRenderStep at Camera+1),
+-- so the game / your own character can't pull the camera back.
+------------------------------------------------------------------
+local specPlayer
+local specBeat, specRender
+local plannedQueue          -- players picked in advance to get Twin Fangs (spectated during the ult)
+
+-- We drive the camera CFrame ourselves (Scriptable) instead of only changing CameraSubject:
+-- if the game's camera script doesn't follow CameraSubject, the camera just never moved.
+local function specApply()
+	local cam = workspace.CurrentCamera
+	if not cam then return end
+
+	local char = specPlayer and specPlayer.Character
+	local hrp = char and rootOf(char)
+	if not hrp or not hrp.Parent then
+		-- target gone: hand the camera back to your own character
+		local own = humOf(localPlayer.Character)
+		if own then
+			if cam.CameraType ~= Enum.CameraType.Custom then cam.CameraType = Enum.CameraType.Custom end
+			if cam.CameraSubject ~= own then cam.CameraSubject = own end
+		end
+		return
+	end
+
+	local hum = humOf(char)
+	if hum and cam.CameraSubject ~= hum then cam.CameraSubject = hum end
+	if cam.CameraType ~= Enum.CameraType.Scriptable then cam.CameraType = Enum.CameraType.Scriptable end
+
+	local focus = hrp.Position + Vector3.new(0, 2, 0)
+	local pos = focus - hrp.CFrame.LookVector * CFG.SPECTATE_DIST + Vector3.new(0, 5, 0)
+	cam.CFrame = CFrame.lookAt(pos, focus)
+end
+
+local function unbindSpec()
+	pcall(function() RunService:UnbindFromRenderStep("DFSpectate") end)
+	if specBeat   then specBeat:Disconnect()   specBeat   = nil end
+	if specRender then specRender:Disconnect() specRender = nil end
+end
+
+local function setSpectate(player)
+	if not CFG.SPECTATE or not player or player == localPlayer then return end
+	if specPlayer == player and specBeat then return end
+	specPlayer = player
+
+	unbindSpec()
+	-- three layers so the game can't win: last in the render step, plus RenderStepped and Heartbeat
+	local okBind = pcall(function()
+		RunService:BindToRenderStep("DFSpectate", 99999, specApply)   -- far after Last (2000): nothing else can run after us
+	end)
+	if not okBind then
+		specRender = RunService.RenderStepped:Connect(specApply)
+	end
+	specBeat = RunService.Heartbeat:Connect(specApply)
+	specApply()
+end
+
+local function clearSpectate()
+	specPlayer = nil
+	unbindSpec()
+
+	local cam = workspace.CurrentCamera
+	local hum = humOf(localPlayer.Character)
+	if cam and hum then
+		pcall(function()
+			cam.CameraSubject = hum
+			cam.CameraType = Enum.CameraType.Custom
+		end)
+	end
+end
+
+------------------------------------------------------------------
+-- anti-hit (rebuilt from what the original does, see notes)
+-- When you get hit you are ragdolled: a "Ragdoll" / "RagdollSim" object appears in your
+-- character. While that lasts, the server is shown your root far away (desync), and your
+-- real position is put back before every frame is drawn, so you see nothing odd.
+-- Not active while Twin Fangs is running, when you are dead, or when an ExtraHitbox exists.
+------------------------------------------------------------------
+local ragdolled = false
+local antiCharConn, antiAddConn, antiRemConn, antiHealthConn, antiBeat, antiRender
+local hitUntil = 0     -- desync is on until this time after a health loss
+local antiRealCF
+
+local function hasRagdoll(char)
+	if not char then return false end
+	return char:FindFirstChild("Ragdoll", true) ~= nil or char:FindFirstChild("RagdollSim", true) ~= nil
+end
+
+local function antiStop()
+	if antiAddConn then antiAddConn:Disconnect() antiAddConn = nil end
+	if antiRemConn then antiRemConn:Disconnect() antiRemConn = nil end
+	if antiHealthConn then antiHealthConn:Disconnect() antiHealthConn = nil end
+	ragdolled = false
+end
+
+local function antiWatch(char)
+	antiStop()
+	if not char then return end
+
+	local hum = char:WaitForChild("Humanoid", 5)
+	if not hum then return end
+
+	antiAddConn = char.DescendantAdded:Connect(function(d)
+		if (d.Name == "Ragdoll" or d.Name == "RagdollSim")
+			and hum.Health > 0 and not char:FindFirstChild("ExtraHitbox") then
+			ragdolled = true
+		end
+	end)
+
+	antiRemConn = char.DescendantRemoving:Connect(function(d)
+		if d.Name == "Ragdoll" or d.Name == "RagdollSim" then
+			task.defer(function()
+				if not hasRagdoll(char) then ragdolled = false end
+			end)
+		end
+	end)
+
+	if hasRagdoll(char) and hum.Health > 0 then ragdolled = true end
+
+	-- any health loss at all (even 1 hp) counts as being hit
+	local lastHealth = hum.Health
+	antiHealthConn = hum.HealthChanged:Connect(function(h)
+		if h < lastHealth and h > 0 then
+			hitUntil = tick() + CFG.ANTI_HIT_HOLD
+		end
+		lastHealth = h
+	end)
+end
+
+local function antiStart()
+	if antiBeat then return end
+
+	antiWatch(localPlayer.Character)
+	antiCharConn = localPlayer.CharacterAdded:Connect(function(char)
+		task.wait(0.1)
+		antiWatch(char)
+	end)
+
+	-- after physics: show the server the fake position
+	antiBeat = RunService.Heartbeat:Connect(function()
+		if not CFG.ANTI_HIT or twinBusy then return end
+		if not ragdolled and tick() >= hitUntil then return end
+		local root = rootOf(localPlayer.Character)
+		local hum = humOf(localPlayer.Character)
+		if not root or not hum or hum.Health <= 0 then return end
+
+		antiRealCF = root.CFrame
+		root.CFrame = CFrame.new(CFG.DESYNC_POS)
+	end)
+
+	-- before the frame is drawn: put your real position back
+	antiRender = RunService.RenderStepped:Connect(function()
+		if antiRealCF then
+			local root = rootOf(localPlayer.Character)
+			if root then root.CFrame = antiRealCF end
+			antiRealCF = nil
+		end
+	end)
+end
+
+local function antiShutdown()
+	if antiBeat then antiBeat:Disconnect() antiBeat = nil end
+	if antiRender then antiRender:Disconnect() antiRender = nil end
+	if antiCharConn then antiCharConn:Disconnect() antiCharConn = nil end
+	antiStop()
+	if antiRealCF then
+		local root = rootOf(localPlayer.Character)
+		if root then root.CFrame = antiRealCF end
+		antiRealCF = nil
+	end
+end
+
+antiStart()
+
+------------------------------------------------------------------
+-- targeting (immunity checks ported from the original; friends skipped by default)
+------------------------------------------------------------------
+local IMMUNE = { "ForceField", "AbsoluteImmortal", "BeingGrabbed", "HunterCounter", "AtomicCounter", "forcefield", "Counter" }
+
+-- Friend lookups are web calls that can block for a second or more, which froze the farm
+-- loop whenever a new player showed up. Now they run in the background; until the answer
+-- is known the player is treated as a friend (= skipped), so nothing ever waits.
+local friendCache, friendPending = {}, {}
+
+local function lookupFriend(p)
+	if friendPending[p.UserId] then return end
+	friendPending[p.UserId] = true
+	task.spawn(function()
+		local ok, res = pcall(function() return localPlayer:IsFriendsWith(p.UserId) end)
+		friendCache[p.UserId] = (ok and res) and true or false
+		friendPending[p.UserId] = nil
+	end)
+end
+
+local function isFriend(p)
+	local v = friendCache[p.UserId]
+	if v == nil then
+		lookupFriend(p)
+		return true
+	end
+	return v
+end
+
+for _, p in ipairs(Players:GetPlayers()) do
+	if p ~= localPlayer then lookupFriend(p) end
+end
+local friendAddConn = Players.PlayerAdded:Connect(function(p) lookupFriend(p) end)
+
+local function hittable(p)
+	if p == localPlayer then return false end
+	if not CFG.HIT_FRIENDS and isFriend(p) then return false end
+
+	local c = p.Character
+	local hum, root = humOf(c), rootOf(c)
+	if not hum or not root or hum.Health <= 0 then return false end
+
+	for _, name in ipairs(IMMUNE) do
+		if c:FindFirstChild(name) then return false end
+	end
+	if c:FindFirstChildWhichIsA("ForceField") then return false end
+	if hasAnim(hum, "15128849047") then return false end
+	if c:GetAttribute("Ulted") and c:GetAttribute("Character") == "Batter" then return false end
+
+	local pos = root.Position
+	if pos.X < CFG.MINX or pos.X > CFG.MAXX or pos.Z < CFG.MINZ or pos.Z > CFG.MAXZ then
+		return false
+	end
+
+	return true
+end
+
+local function isStunned(p)
+	local hum = humOf(p.Character)
+	return hum and (hasAnim(hum, "18896222853") or hasAnim(hum, "137434257516014")) or false
+end
+
+-- farm: lowest-health hittable player (same idea as the original picker)
+local function pickFarmTarget(avoid)
+	local best, bestHp = nil, math.huge
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= avoid and hittable(p) then
+			local hp = humOf(p.Character).Health
+			if hp < bestHp then
+				best, bestHp = p, hp
+			end
+		end
+	end
+	return best
+end
+
+-- twin fangs: EVERY player with a body except you and friends, whatever their character,
+-- immunity or state (shuffled so nobody is always last)
+local function twinTargetList()
+	local list = {}
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= localPlayer and not isFriend(p) and rootOf(p.Character) and humOf(p.Character) then
+			table.insert(list, p)
+		end
+	end
+	for i = #list, 2, -1 do
+		local j = math.random(i)
+		list[i], list[j] = list[j], list[i]
+	end
+	return list
+end
+
+-- glass platform just under a position so you rest there (top = y - 3, root hovers like standing)
+local platforms = {}
+local function ensurePlatform(pos)
+	local key = math.floor(pos.Y + 0.5)
+	if platforms[key] and platforms[key].Parent then return end
+	local platform = Instance.new("Part")
+	platform.Name = "DuelFarmPlatform"
+	platform.Size = Vector3.new(2048, 10, 2048)
+	platform.Position = Vector3.new(pos.X, pos.Y - 3 - platform.Size.Y / 2, pos.Z)
+	platform.Anchored = true
+	platform.CanCollide = true
+	platform.Material = Enum.Material.Glass
+	platform.Color = Color3.fromRGB(210, 235, 255)
+	platform.Transparency = 0.55
+	platform.Reflectance = 0.15
+	platform.Parent = workspace
+	platforms[key] = platform
+end
+
+------------------------------------------------------------------
+-- duel routine (called from mainLoop right after key 3 + DUEL_WAIT)
+------------------------------------------------------------------
+local function runDuel()
+	if twinBusy then return end
+	twinBusy = true
+	setPhase("Duel")
+
+	local keepVel = true
+	task.spawn(function()
+		while keepVel do
+			local r = rootOf(localPlayer.Character)
+			if r then
+				r.AssemblyLinearVelocity  = Vector3.zero
+				r.AssemblyAngularVelocity = Vector3.zero
+			end
+			RunService.Heartbeat:Wait()
+		end
+	end)
+
+	-- everyone except you and friends: the planned list first, then anyone who joined since
+	local queue, inQueue = {}, {}
+	for _, p in ipairs(plannedQueue or {}) do
+		if p.Parent and rootOf(p.Character) and humOf(p.Character) then
+			table.insert(queue, p)
+			inQueue[p] = true
+		end
+	end
+	for _, p in ipairs(twinTargetList()) do
+		if not inQueue[p] then table.insert(queue, p) end
+	end
+	plannedQueue = nil
+
+	-- glue: EXACTLY DUEL_TIME seconds in total, the time left is always shared evenly
+	local hardEnd = tick() + CFG.DUEL_TIME
+	for idx, target in ipairs(queue) do
+		if not running or tick() >= hardEnd then break end
+
+		local tRoot = rootOf(target.Character)
+		local mChar = localPlayer.Character
+		local mRoot = rootOf(mChar)
+
+		if tRoot and humOf(target.Character) and mRoot then
+			local left = #queue - idx + 1
+			local slotEnd = tick() + (hardEnd - tick()) / left
+			link(mRoot, tRoot, humOf(mChar))
+			stats.hits += 1
+			while running and tick() < slotEnd do
+				RunService.Heartbeat:Wait()
+			end
+		end
+	end
+	unlink()
+	keepVel = false
+
+	-- anchored at -10000y (zero velocity every Heartbeat)
+	setPhase("Anchored at " .. math.floor(CFG.VOID_POS.Y + 0.5) .. "y")
+	local function pose()
+		local r = rootOf(localPlayer.Character)
+		if not r then return end
+		r.AssemblyLinearVelocity  = Vector3.zero
+		r.AssemblyAngularVelocity = Vector3.zero
+		r.CFrame = CFrame.new(CFG.VOID_POS)
+	end
+	pose()
+	local poseConn = RunService.Heartbeat:Connect(pose)
+
+	local t1 = tick()
+	while running and tick() - t1 < CFG.RETURN_DELAY do
+		task.wait(0.1)
+	end
+	poseConn:Disconnect()
+
+	-- come back at -500y (glass floor there so you don't fall)
+	ensurePlatform(CFG.RETURN_POS)
+	local r2 = rootOf(localPlayer.Character)
+	if r2 then
+		r2.CFrame = CFrame.new(CFG.RETURN_POS)
+		zero(r2)
+	end
+
+	stats.ults += 1
+	twinBusy = false
+end
+
+
+------------------------------------------------------------------
+-- phases
+------------------------------------------------------------------
+local lastDuel = 0
+
+local function mainLoop()
+	while running do
+		local ok, err = pcall(function()
+			local char = localPlayer.Character
+			local hum, root = humOf(char), rootOf(char)
+
+			if not hum or not root or hum.Health <= 0 then
+				setPhase("Waiting to spawn...")
+				task.wait(0.5)
+				return
+			end
+
+			if tick() - lastDuel < CFG.DUEL_GAP or not moveReady(3) then
+				setPhase("Waiting for slot 3 cooldown")
+				task.wait(0.1)
+				return
+			end
+
+			plannedQueue = twinTargetList()
+			if #plannedQueue == 0 then
+				setPhase("No targets, waiting...")
+				task.wait(0.3)
+				return
+			end
+
+			-- spectate one single target
+			setSpectate(plannedQueue[1])
+
+			setPhase("Duel: pressing 3")
+			pressSlotKey(CFG.DUEL_KEY)
+			task.wait(CFG.DUEL_WAIT)
+			runDuel()
+			lastDuel = tick()
+		end)
+
+		if not ok then
+			warn("[DuelFarm] " .. tostring(err))
+			task.wait(1)
+		end
+	end
+end
+
+local function startBot()
+	if running then return end
+	running = true
+
+	task.spawn(mainLoop)
+end
+
+local function stopBot()
+	running = false
+	unlink()
+	restoreHome()
+	clearSpectate()
+	setPhase("Stopped")
+end
+
+------------------------------------------------------------------
+-- invisible (taken from the original script)
+-- every Heartbeat it plays a frozen animation (71181015443030 at 13.45s,
+-- huge weight) and stops it again in RenderStepped; your own body shows at 50%
+------------------------------------------------------------------
+local invisOn   = false
+local invisBusy = false
+local invisTrack
+local invisBeat, invisCharConn
+local dimConns = {}
+
+local function dimPart(part)
+	if not part:IsA("BasePart") then return end
+	if part.Name == "HumanoidRootPart" then return end
+	if part.Transparency == 1 then return end
+	if part.Name:lower():find("hitbox") then return end
+
+	part.LocalTransparencyModifier = 0.5
+	table.insert(dimConns, part:GetPropertyChangedSignal("LocalTransparencyModifier"):Connect(function()
+		if invisOn and part.LocalTransparencyModifier ~= 0.5 then
+			part.LocalTransparencyModifier = 0.5
+		end
+	end))
+end
+
+local function dimCharacter(char)
+	for _, d in ipairs(char:GetDescendants()) do
+		dimPart(d)
+	end
+
+	table.insert(dimConns, char.DescendantAdded:Connect(function(d)
+		if invisOn then dimPart(d) end
+	end))
+end
+
+local function stopInvisTrack()
+	if invisTrack then
+		pcall(function()
+			if invisTrack.IsPlaying then invisTrack:Stop() end
+			invisTrack:Destroy()
+		end)
+		invisTrack = nil
+	end
+end
+
+local function invisStep()
+	if not invisOn or invisBusy then return end
+
+	local char = localPlayer.Character
+	local hum  = char and char:FindFirstChildOfClass("Humanoid")
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	local animator = hum and hum:FindFirstChildOfClass("Animator")
+	if not hum or not root or not animator then return end
+	if hum.Health <= 0 then return end
+
+	invisBusy = true
+
+	pcall(function()
+		local velocity = root.Velocity
+
+		local anim = Instance.new("Animation")
+		anim.AnimationId = "rbxassetid://71181015443030"
+		invisTrack = animator:LoadAnimation(anim)
+		invisTrack.Priority = Enum.AnimationPriority.Action4
+		invisTrack:Play()
+		invisTrack:AdjustSpeed(0)
+		invisTrack:AdjustWeight(2e9)
+		invisTrack.TimePosition = 13.45
+
+		RunService.RenderStepped:Wait()
+
+		stopInvisTrack()
+		root.Velocity = velocity
+	end)
+
+	invisBusy = false
+end
+
+local function setInvisible(on)
+	if on == invisOn then return end
+	invisOn = on
+
+	if on then
+		if localPlayer.Character then dimCharacter(localPlayer.Character) end
+
+		invisCharConn = localPlayer.CharacterAdded:Connect(function(char)
+			task.wait(0.1)
+			if invisOn then dimCharacter(char) end
+		end)
+
+		invisBeat = RunService.Heartbeat:Connect(invisStep)
+	else
+		if invisBeat then invisBeat:Disconnect() invisBeat = nil end
+		if invisCharConn then invisCharConn:Disconnect() invisCharConn = nil end
+
+		for _, c in ipairs(dimConns) do
+			pcall(function() c:Disconnect() end)
+		end
+		dimConns = {}
+
+		stopInvisTrack()
+
+		local char = localPlayer.Character
+		if char then
+			for _, d in ipairs(char:GetDescendants()) do
+				if d:IsA("BasePart") and d.Name ~= "HumanoidRootPart" then
+					d.LocalTransparencyModifier = 0
+				end
+			end
+		end
+	end
+end
+
+------------------------------------------------------------------
+-- panel (black + gold)
+------------------------------------------------------------------
+local BG       = Color3.fromRGB(12, 12, 12)
+local GOLD     = Color3.fromRGB(235, 190, 30)
+local GOLD_DIM = Color3.fromRGB(190, 150, 35)
+local FILL     = Color3.fromRGB(62, 48, 8)
+local FILL_ON  = Color3.fromRGB(235, 190, 30)
+local FONT     = Enum.Font.Code
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "DuelFarmUI"
+gui.ResetOnSpawn = false
+gui.DisplayOrder = 999
+local okParent = pcall(function() gui.Parent = game.CoreGui end)
+if not okParent or not gui.Parent then
+	gui.Parent = localPlayer:WaitForChild("PlayerGui")
+end
+
+local function round(obj, r)
+	Instance.new("UICorner", obj).CornerRadius = UDim.new(0, r)
+end
+
+local main = Instance.new("Frame")
+main.Size = UDim2.new(0, 270, 0, 290)
+main.Position = UDim2.new(0, 12, 1, -(290 + 60))   -- sits above the toggle button, bottom-left
+main.BackgroundColor3 = BG
+main.BorderSizePixel = 0
+main.Active = true
+main.Visible = false          -- starts hidden: only the toggle button shows
+main.Draggable = true
+main.Parent = gui
+round(main, 8)
+
+local stroke = Instance.new("UIStroke")
+stroke.Color = GOLD
+stroke.Thickness = 2
+stroke.Parent = main
+
+local function label(text, size, color, y, h)
+	local l = Instance.new("TextLabel")
+	l.Size = UDim2.new(1, -24, 0, h)
+	l.Position = UDim2.new(0, 12, 0, y)
+	l.BackgroundTransparency = 1
+	l.Font = FONT
+	l.TextSize = size
+	l.TextColor3 = color
+	l.TextXAlignment = Enum.TextXAlignment.Left
+	l.TextYAlignment = Enum.TextYAlignment.Top
+	l.TextWrapped = true
+	l.Text = text
+	l.Parent = main
+	return l
+end
+
+local title      = label("Duel Farm", 20, GOLD, 8, 26)
+local phaseLabel = label("Idle", 14, GOLD, 42, 36)
+local statsLabel = label("Ults: 0   Hits: 0", 14, GOLD_DIM, 80, 16)
+local charLabel  = label("", 12, GOLD_DIM, 98, 16)
+
+local closeBtn = Instance.new("TextButton")
+closeBtn.Size = UDim2.new(0, 30, 0, 26)
+closeBtn.Position = UDim2.new(1, -40, 0, 8)
+closeBtn.BackgroundColor3 = FILL
+closeBtn.BorderSizePixel = 0
+closeBtn.Font = FONT
+closeBtn.TextSize = 18
+closeBtn.TextColor3 = GOLD
+closeBtn.Text = "x"
+closeBtn.Parent = main
+round(closeBtn, 6)
+
+local function mkButton(right, y)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.new(0.5, -18, 0, 32)
+	b.Position = right and UDim2.new(0.5, 6, 0, y) or UDim2.new(0, 12, 0, y)
+	b.BackgroundColor3 = FILL
+	b.BorderSizePixel = 0
+	b.Font = FONT
+	b.TextSize = 13
+	b.TextColor3 = GOLD
+	b.AutoButtonColor = true
+	b.Parent = main
+	round(b, 6)
+	return b
+end
+
+local function paintToggle(btn, text, on)
+	btn.Text = text .. (on and ": ON" or ": OFF")
+	btn.BackgroundColor3 = on and FILL_ON or FILL
+	btn.TextColor3 = on and BG or GOLD
+end
+
+local runBtn    = mkButton(false, 126)
+local friendBtn = mkButton(true,  126)
+local invisBtn  = mkButton(false, 164)
+local voidBtn   = mkButton(true,  164)
+
+voidBtn.AutoButtonColor = false
+voidBtn.Active = false            -- antivoid is always on: display only
+voidBtn.Text = "Antivoid: ON"
+voidBtn.BackgroundColor3 = FILL_ON
+voidBtn.TextColor3 = BG
+
+
+local shutdownBtn = Instance.new("TextButton")
+shutdownBtn.Name = "Shutdown"
+shutdownBtn.Size = UDim2.new(1, -24, 0, 32)
+shutdownBtn.Position = UDim2.new(0, 12, 0, 206)
+shutdownBtn.BackgroundColor3 = Color3.fromRGB(90, 20, 20)
+shutdownBtn.BorderSizePixel = 0
+shutdownBtn.Font = FONT
+shutdownBtn.TextSize = 13
+shutdownBtn.TextColor3 = Color3.fromRGB(255, 120, 120)
+shutdownBtn.Text = "Shutdown"
+shutdownBtn.Parent = main
+round(shutdownBtn, 6)
+
+-- Shutdown: stop everything, destroy the panel AND the toggle button, and once that is
+-- finished teleport you up to 500y.
+local shuttingDown = false
+shutdownBtn.MouseButton1Click:Connect(function()
+	if shuttingDown then return end
+	shuttingDown = true
+	shutdownBtn.Text = "Shutting down..."
+
+	task.spawn(function()
+		-- 1) stop the bot, but keep antivoid up until a running Twin Fangs cast has brought you back
+		stopBot()
+		local t0 = tick()
+		while twinBusy and tick() - t0 < 10 do
+			task.wait(0.1)
+		end
+
+		-- a farm loop step that was mid-press when you hit Shutdown may still be finishing:
+		-- give it a moment, then release the glue for good and go back to your real spot
+		task.wait(0.3)
+		unlink()
+		restoreHome()
+		local hum = humOf(localPlayer.Character)
+		if hum then pcall(function() hum.AutoRotate = true end) end
+
+		-- 2) full shutdown: restores everything and destroys the panel and the toggle button
+		pcall(function() getgenv().DFStop() end)
+
+		-- 3) shutdown finished: teleport up to 500y
+		local r = rootOf(localPlayer.Character)
+		if r then
+			r.AssemblyLinearVelocity  = Vector3.zero
+			r.AssemblyAngularVelocity = Vector3.zero
+			r.CFrame = CFrame.new(r.Position.X, 500, r.Position.Z)
+		end
+	end)
+end)
+
+local noteLabel = label("Friends are skipped. Invisible + antivoid + anti-hit start on execute.", 11, GOLD_DIM, 248, 30)
+
+paintToggle(runBtn, "Running", running)
+local function lockFriendBtn()
+	CFG.HIT_FRIENDS = false                -- can never be turned on from here
+	friendBtn.Active = false
+	friendBtn.AutoButtonColor = false
+	friendBtn.Text = "Hit friends: OFF"
+	friendBtn.BackgroundColor3 = FILL
+	friendBtn.TextColor3 = GOLD_DIM
+end
+lockFriendBtn()
+paintToggle(invisBtn, "Invisible", invisOn)
+
+runBtn.MouseButton1Click:Connect(function()
+	if running then stopBot() else startBot() end
+	paintToggle(runBtn, "Running", running)
+end)
+
+invisBtn.MouseButton1Click:Connect(function()
+	setInvisible(not invisOn)
+	paintToggle(invisBtn, "Invisible", invisOn)
+end)
+
+-- toggle button, bottom-left corner, always visible
+local toggleBtn = Instance.new("TextButton")
+toggleBtn.Name = "DuelFarmToggle"
+toggleBtn.Size = UDim2.new(0, 120, 0, 36)
+toggleBtn.Position = UDim2.new(0, 12, 1, -48)
+toggleBtn.BackgroundColor3 = BG
+toggleBtn.BorderSizePixel = 0
+toggleBtn.Font = FONT
+toggleBtn.TextSize = 14
+toggleBtn.TextColor3 = GOLD
+toggleBtn.Text = "Duel Farm"
+toggleBtn.AutoButtonColor = true
+toggleBtn.Parent = gui
+round(toggleBtn, 8)
+local toggleStroke = Instance.new("UIStroke")
+toggleStroke.Color = GOLD
+toggleStroke.Thickness = 2
+toggleStroke.Parent = toggleBtn
+
+toggleBtn.MouseButton1Click:Connect(function()
+	main.Visible = not main.Visible
+end)
+
+closeBtn.MouseButton1Click:Connect(function()
+	main.Visible = false      -- x just hides the panel; the toggle button brings it back
+end)
+
+task.spawn(function()
+	while gui.Parent do
+		phaseLabel.Text = phaseText
+		statsLabel.Text = "Ults: " .. stats.ults .. "   Hits: " .. stats.hits
+
+		local c = localPlayer.Character
+		charLabel.Text = "Character: " .. tostring(c and c:GetAttribute("Character"))
+
+		paintToggle(runBtn, "Running", running)
+		paintToggle(invisBtn, "Invisible", invisOn)
+		lockFriendBtn()
+		do
+			local cam = workspace.CurrentCamera
+			local thrp = specPlayer and rootOf(specPlayer.Character)
+			if specPlayer and cam and thrp then
+				noteLabel.Text = string.format("Spectating: %s | cam: %s | dist: %.0f",
+					specPlayer.DisplayName, tostring(cam.CameraType):gsub("Enum.CameraType.", ""), (cam.CFrame.Position - thrp.Position).Magnitude)
+			elseif specPlayer then
+				noteLabel.Text = "Spectating: " .. specPlayer.DisplayName .. " (no body yet)"
+			else
+				noteLabel.Text = "Spectate: idle (starts when it picks a target)"
+			end
+		end
+		task.wait(0.3)
+	end
+end)
+
+------------------------------------------------------------------
+-- cleanup + auto start
+------------------------------------------------------------------
+getgenv().DFStop = function()
+	stopBot()
+	if friendAddConn then friendAddConn:Disconnect() friendAddConn = nil end
+	antiShutdown()
+	clearSpectate()
+	if voidCharConn then voidCharConn:Disconnect() voidCharConn = nil end
+	if voidHealthConn then voidHealthConn:Disconnect() voidHealthConn = nil end
+	if voidFollowConn then voidFollowConn:Disconnect() voidFollowConn = nil end
+	if fallenConn then fallenConn:Disconnect() fallenConn = nil end
+	pcall(function() voidPart:Destroy() end)
+	for _, pl in pairs(platforms) do pcall(function() pl:Destroy() end) end
+	pcall(function() workspace.FallenPartsDestroyHeight = -500 end)
+	setInvisible(false)
+	gui:Destroy()
+end
+
+setInvisible(true)     -- auto invisible on execute (antivoid is already installed above)
+startBot()
+paintToggle(runBtn, "Running", running)
+paintToggle(invisBtn, "Invisible", invisOn)
