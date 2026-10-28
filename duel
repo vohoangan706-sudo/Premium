@@ -19,6 +19,12 @@ local HttpService         = game:GetService("HttpService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local localPlayer         = Players.LocalPlayer
 
+-- the spot you return to: saved right now, before anything else loads
+local savedSpot do
+	local r0 = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
+	savedSpot = r0 and r0.CFrame
+end
+
 ------------------------------------------------------------------
 -- settings
 ------------------------------------------------------------------
@@ -27,6 +33,8 @@ local CFG = {
 	TARGET_TIME    = 6,                   -- farm: seconds on one target before switching
 	DUEL_KEY       = Enum.KeyCode.Three,  -- duel move (slot 3)
 	DUEL_WAIT      = 0.4,                 -- seconds between pressing the duel key and the glue
+	RETURN_EARLY   = 0.5,                 -- go back to the saved spot this many seconds BEFORE slot 3 comes off cooldown
+	DUEL_COOLDOWN  = 19.5,                  -- slot 3 cooldown in seconds; 0 = read it from the hotbar / learn it from the first duel
 	DUEL_GAP       = 2,                   -- minimum seconds between two duels
 	DUEL_TIME      = 0.7,                 -- EXACT seconds of glue on the other players, split evenly
 	HOLD_POS       = Vector3.new(0, -501, 0),     -- anchored here first, right after the glue
@@ -683,8 +691,36 @@ end
 -- phases
 ------------------------------------------------------------------
 local lastDuel = 0
-local homeCF, away = nil, false   -- your spot before the duel; away = you are sitting at -500y
+local away, backEarly = false, false   -- away = sitting at -500y; backEarly = already teleported to the saved spot
+local pressT, learnedCd = nil, nil     -- when 3 was pressed / the cooldown length measured from it
 
+-- seconds left on slot 3's cooldown, or nil when unknown.
+-- 1) a number shown in the hotbar's Cooldown object, 2) CFG.DUEL_COOLDOWN, 3) the length learned from the last duel
+local function cooldownLeft()
+	local okT, txt = pcall(function()
+		local cd = localPlayer.PlayerGui.Hotbar.Backpack.Hotbar["3"].Base:FindFirstChild("Cooldown")
+		if not cd then return nil end
+		for _, d in ipairs({cd, table.unpack(cd:GetDescendants())}) do
+			if d:IsA("TextLabel") or d:IsA("TextButton") then
+				local n = tonumber(d.Text:match("%d+%.?%d*"))
+				if n then return n end
+			end
+		end
+		return nil
+	end)
+	if okT and txt then return txt end
+
+	local len = (CFG.DUEL_COOLDOWN and CFG.DUEL_COOLDOWN > 0) and CFG.DUEL_COOLDOWN or learnedCd
+	if len and pressT then return len - (tick() - pressT) end
+	return nil
+end
+
+local function goSavedSpot(root)
+	if savedSpot then
+		root.CFrame = savedSpot
+		zero(root)
+	end
+end
 
 local function mainLoop()
 	while running do
@@ -693,16 +729,33 @@ local function mainLoop()
 			local hum, root = humOf(char), rootOf(char)
 
 			if not hum or not root or hum.Health <= 0 then
-				homeCF, away = nil, false   -- new body: forget the old spot
+				away, backEarly = false, false   -- new body
 				setPhase("Waiting to spawn...")
 				task.wait(0.5)
 				return
 			end
 
 			if tick() - lastDuel < CFG.DUEL_GAP or not moveReady(3) then
-				setPhase("Waiting for slot 3 cooldown")
-				task.wait(0.1)
+				-- RETURN_EARLY s before the cooldown ends: go back to the saved spot
+				if away and not backEarly then
+					local left = cooldownLeft()
+					if left and left <= CFG.RETURN_EARLY then
+						goSavedSpot(root)
+						backEarly = true
+						away = false
+						setPhase("Back at saved spot, waiting for slot 3")
+					end
+				end
+				if not backEarly then setPhase("Waiting for slot 3 cooldown") end
+				task.wait(0.05)
 				return
+			end
+
+			-- cooldown over: remember how long it was (for the early return next time)
+			if pressT then
+				local len = tick() - pressT
+				if len >= 2 and len < 300 then learnedCd = len end
+				pressT = nil
 			end
 
 			plannedQueue = twinTargetList()
@@ -712,16 +765,17 @@ local function mainLoop()
 				return
 			end
 
-			-- off cooldown: go back to the old spot first, then continue with the duel
-			if away and homeCF then
-				root.CFrame = homeCF
-				zero(root)
+			-- still at -500y (cooldown length unknown): go to the saved spot now, then continue
+			if away then
+				goSavedSpot(root)
+				away = false
 				task.wait(0.1)
 			end
-			away = false
-			homeCF = root.CFrame
+			backEarly = false
+			if not savedSpot then savedSpot = root.CFrame end
 
 			setPhase("Duel: pressing 3")
+			pressT = tick()
 			pressSlotKey(CFG.DUEL_KEY)
 			task.wait(CFG.DUEL_WAIT)
 			runDuel()
