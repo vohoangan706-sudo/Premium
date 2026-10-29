@@ -42,6 +42,11 @@ local CFG = {
 	ULT_DURATION   = 45,                  -- how long your ult lasts in seconds; 0 = learn it by itself from the first ult
 	ULT_END_LEAD   = 0,                   -- press the key this many seconds BEFORE the ult ends
 	ULT_END_KEY    = Enum.KeyCode.Four,   -- key pressed when the ult is about to end
+	ESCAPE_ON      = true,                -- escape: when someone plays the escape animation near you, go to -501y
+	ESCAPE_ANIM    = "11343318134",       -- escape: the animation id that triggers it (rbxassetid://11343318134)
+	ESCAPE_RANGE   = 10,                  -- escape: only if the player playing it is within this many studs of you
+	ESCAPE_TIME    = 10,                  -- escape: seconds anchored at ESCAPE_Y
+	ESCAPE_Y       = -501,                -- escape: height you are teleported to and anchored at
 	ULT_TRY_EVERY  = 2,                   -- farm: press the ult key this often
 	ANTI_HIT       = true,                -- anti-hit (ragdoll desync) is always on, built into the panel (no button)
 	ANTI_HIT_HOLD  = 1.0,                 -- anti-hit: seconds the desync stays on after ANY health loss (even 1 hp)
@@ -71,6 +76,7 @@ local CFG = {
 ------------------------------------------------------------------
 local running   = false
 local twinBusy  = false
+local escaping  = false   -- escape (-501y for ESCAPE_TIME) is running: glue / anti-hit stay off
 local stats     = { ults = 0, hits = 0 }
 local phaseText = "Idle"
 
@@ -200,7 +206,7 @@ end
 
 local function link(a, b, hum)
 	unlink()
-	if not running then return end   -- stopped / shutting down: never (re)glue, or you stay stuck at (0,0,5)
+	if not running or escaping then return end   -- stopped / shutting down / escaping: never (re)glue, or you stay stuck at (0,0,5)
 	if not glueHome or glueHomeRoot ~= a then glueHome, glueHomeRoot = a.CFrame, a end
 	linkMy, linkTheir = a, b
 
@@ -513,7 +519,7 @@ local function antiStart()
 
 	-- after physics: show the server the fake position
 	antiBeat = RunService.Heartbeat:Connect(function()
-		if not CFG.ANTI_HIT or twinBusy then return end
+		if not CFG.ANTI_HIT or twinBusy or escaping then return end
 		if not ragdolled and tick() >= hitUntil then return end
 		local root = rootOf(localPlayer.Character)
 		local hum = humOf(localPlayer.Character)
@@ -794,6 +800,91 @@ local function runTwinFangs(track)
 end
 
 ------------------------------------------------------------------
+-- escape: someone plays the trigger animation on you -> teleport + anchored at -501y for 10s
+-- Detected the moment the animation starts (AnimationPlayed on every other player), only when
+-- that player is within ESCAPE_RANGE of you. After ESCAPE_TIME you go back to where you were.
+-- Ignored while Twin Fangs is running (you are anchored down there anyway).
+------------------------------------------------------------------
+local escConns, escPlatform = {}, nil
+local escapeAlive = true
+
+local function ensureEscPlatform()
+	if escPlatform and escPlatform.Parent then return end
+	local pl = Instance.new("Part")
+	pl.Name = "TFEscapePlatform"
+	pl.Size = Vector3.new(2048, 10, 2048)
+	pl.Position = Vector3.new(0, CFG.ESCAPE_Y - 3 - pl.Size.Y / 2, 0)
+	pl.Anchored = true
+	pl.CanCollide = true
+	pl.Material = Enum.Material.Glass
+	pl.Color = Color3.fromRGB(210, 235, 255)
+	pl.Transparency = 0.55
+	pl.Parent = workspace
+	escPlatform = pl
+end
+
+local function escape()
+	if escaping or twinBusy or not CFG.ESCAPE_ON then return end
+	local char = localPlayer.Character
+	local root, hum = rootOf(char), humOf(char)
+	if not root or not hum or hum.Health <= 0 then return end
+
+	escaping = true
+	local backCF = (glueHome and glueHomeRoot == root) and glueHome or root.CFrame
+	unlink()
+	ensureEscPlatform()
+
+	local target = Vector3.new(0, CFG.ESCAPE_Y, 0)
+	local function pose()
+		local r = rootOf(localPlayer.Character)
+		if not r then return end
+		r.AssemblyLinearVelocity  = Vector3.zero
+		r.AssemblyAngularVelocity = Vector3.zero
+		r.CFrame = CFrame.new(target)
+	end
+	setPhase("ESCAPE: anchored at " .. CFG.ESCAPE_Y .. "y for " .. CFG.ESCAPE_TIME .. "s")
+	pose()
+	local conn = RunService.Heartbeat:Connect(pose)
+
+	local t0 = tick()
+	while escapeAlive and running and tick() - t0 < CFG.ESCAPE_TIME do
+		task.wait(0.1)
+	end
+	conn:Disconnect()
+
+	local r2 = rootOf(localPlayer.Character)
+	if r2 and escapeAlive then
+		r2.CFrame = backCF
+		zero(r2)
+	end
+	escaping = false
+end
+
+local function watchChar(char)
+	local hum = char:WaitForChild("Humanoid", 5)
+	if not hum then return end
+	local animator = hum:FindFirstChildOfClass("Animator")
+	local sig = animator and animator.AnimationPlayed or hum.AnimationPlayed
+	table.insert(escConns, sig:Connect(function(tr)
+		if not escapeAlive or not CFG.ESCAPE_ON then return end
+		if not tostring(tr.Animation.AnimationId):match(CFG.ESCAPE_ANIM) then return end
+		local r, mine = rootOf(char), rootOf(localPlayer.Character)
+		if r and mine and (r.Position - mine.Position).Magnitude <= CFG.ESCAPE_RANGE then
+			task.spawn(escape)
+		end
+	end))
+end
+
+local function watchPlayer(p)
+	if p == localPlayer then return end
+	if p.Character then task.spawn(watchChar, p.Character) end
+	table.insert(escConns, p.CharacterAdded:Connect(function(c) task.spawn(watchChar, c) end))
+end
+
+for _, p in ipairs(Players:GetPlayers()) do watchPlayer(p) end
+table.insert(escConns, Players.PlayerAdded:Connect(watchPlayer))
+
+------------------------------------------------------------------
 -- hook the Twin Fangs animation on your character
 ------------------------------------------------------------------
 local animConn
@@ -927,7 +1018,7 @@ local function m1Loop()
 	while running do
 		local c = localPlayer.Character
 		local hum = humOf(c)
-		if c and hum and hum.Health > 0 and not c:GetAttribute("Ulted") and not twinBusy then
+		if c and hum and hum.Health > 0 and not c:GetAttribute("Ulted") and not twinBusy and not escaping then
 			click()
 			task.wait(CFG.M1_INTERVAL)
 		else
@@ -1466,6 +1557,10 @@ getgenv().TFStop = function()
 	pcall(function() voidPart:Destroy() end)
 	pcall(function() if voidPlatform then voidPlatform:Destroy() end end)
 	pcall(function() workspace.FallenPartsDestroyHeight = -500 end)
+	escapeAlive = false
+	for _, c in ipairs(escConns) do pcall(function() c:Disconnect() end) end
+	escConns = {}
+	pcall(function() if escPlatform then escPlatform:Destroy() end end)
 	setInvisible(false)
 	gui:Destroy()
 end
