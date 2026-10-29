@@ -33,6 +33,7 @@ local ADMIN_USER_IDS = {
 	3101624536,
 	11535922291,
 	11517308890,
+ 11779098237,
 }
 
 if not table.find(ADMIN_USER_IDS, player.UserId) then
