@@ -34,6 +34,8 @@ local flag12 = false    -- "ragdoll desync running" flag used by the ragdoll tri
 local fullConns = {}
 local stopped = false
 local lastDesyncT = 0   -- last time the engine used the fake camera humanoid
+local wasD, dStart = false, 0
+getgenv().FullAntiHitDebug = true   -- prints which attack triggered the desync and for how long (set false to silence)
 
 getgenv().desync = nil
 getgenv().FullAntiHitActive = true
@@ -239,6 +241,7 @@ do
 		local cFrame2 = humanoidRootPart.CFrame
 		local velocity = humanoidRootPart.Velocity
 		local angVel = humanoidRootPart.AssemblyAngularVelocity
+		local wasAR = nil
 		v5 = cFrame2
 		local currentCamera2 = workspace.CurrentCamera
 		local flag13 = flag12 and not localPlayer.Character:FindFirstChild("AbsoluteImmortal")
@@ -251,6 +254,10 @@ do
 
 		if cFrame3 then
 			lastDesyncT = tick()
+			wasAR = humanoid2.AutoRotate
+			pcall(function() humanoid2.AutoRotate = false end)
+			humanoidRootPart.AssemblyAngularVelocity = Vector3.zero
+			if not wasD then wasD = true dStart = tick() end
 			local flag14
 
 			if currentCamera2 then
@@ -264,7 +271,10 @@ do
 				currentCamera2.CameraSubject = humanoid
 			end
 
-			if flag4 and cFrame then
+			local glueTarget = getgenv().TFGlueTarget
+			if glueTarget and glueTarget.Parent then
+				part2.CFrame = glueTarget.CFrame * CFrame.new(0, 0, 5)   -- farm glue: camera stays by the target
+			elseif flag4 and cFrame then
 				part2.CFrame = cFrame
 			else
 				part2.CFrame = cFrame2
@@ -345,7 +355,8 @@ do
 		end
 
 		humanoidRootPart.Velocity = velocity
-		humanoidRootPart.AssemblyAngularVelocity = angVel
+		humanoidRootPart.AssemblyAngularVelocity = cFrame3 and Vector3.zero or angVel
+		if wasAR ~= nil then pcall(function() humanoid2.AutoRotate = wasAR end) end
 		flag10 = false
 	end))
 	task.spawn(function()
@@ -499,6 +510,10 @@ do
 		local char = localPlayer.Character
 		local hum = char and char:FindFirstChildOfClass("Humanoid")
 		if not cam or not hum then return end
+		if wasD and tick() - lastDesyncT > 0.15 then
+			wasD = false
+			if getgenv().FullAntiHitDebug then warn(string.format("[FullAntiHit] desync lasted %.2fs", lastDesyncT - dStart)) end
+		end
 		if cam.CameraSubject == humanoid and tick() - lastDesyncT > 0.15 then
 			cam.CameraSubject = hum
 			pcall(function() char:SetAttribute("NoHeadLerp", false) end)
@@ -584,6 +599,13 @@ do
 			task.spawn(function()
 				if arg3.WeightTarget == 0 or arg3.Speed == 0 then
 					return
+				end
+				if getgenv().FullAntiHitDebug then
+					local ar = arg2:FindFirstChild("HumanoidRootPart")
+					local d = ar and (ar.Position - humanoidRootPart2.Position).Magnitude or -1
+					if d >= 0 and d <= 60 then
+						warn(string.format("[FullAntiHit] %s plays %s  dist %.0f", arg.Name, animationId:match("%d+") or animationId, d))
+					end
 				end
 				local cframe = CFrame.new(9e9, 9e9, 9e9)
 				local v3 = character
