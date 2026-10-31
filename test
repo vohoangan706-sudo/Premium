@@ -1,15 +1,207 @@
--- ============================================================
--- PROJECT YIELDING - ALL ANTI-HIT CODE (extracted, original text, original line numbers noted)
--- Source: project_yeld.lua.txt. Nothing here is edited; sections are separated by header comments.
--- ============================================================
+--[[
+  FULL ANTI-HIT  (Project Yielding's anti-hit, standalone)
+  Everything below is the ORIGINAL code from Project Yielding (same logic, same numbers),
+  stitched together so it runs by itself next to your Twin Fangs farm:
+    1. desync engine      - server sees you at 9e9, you see your real position
+    2. ragdoll trigger    - Ragdoll / RagdollSim on you -> desync until it is gone
+    3. predict system     - an enemy attack animation starts -> desync while it can reach you
+    4. visuals + failsafe - particles / 50% body while desynced, desync cleared after 20 s
+  Not included: the "Death Counter" move itself and the invisibility button (the farm has its own).
+  The farm file pauses this while Twin Fangs / the escape are running (getgenv().TFBusy).
+  Stop it with:  getgenv().FullAntiHitStop()
+]]
 
+if getgenv().FullAntiHitStop then pcall(getgenv().FullAntiHitStop) end
 
--- ============================================================
--- 1. DESYNC ENGINE - Heartbeat loop. While getgenv().desync is set it moves your root to the fake CFrame (9e9) for the server, then restores it in RenderStepped. Also the optional 'invisible' animation (flag11).
--- original lines 1933-2076
--- ============================================================
-	RunService.Heartbeat:Connect(function()
-		if not flag3 then
+local Players             = game:GetService("Players")
+local RunService          = game:GetService("RunService")
+local UserInputService    = game:GetService("UserInputService")
+local ReplicatedStorage   = game:GetService("ReplicatedStorage")
+local VirtualInputManager = game:GetService("VirtualInputManager")
+local localPlayer         = Players.LocalPlayer
+local Workspace           = workspace
+
+-- shared state the original keeps in the big script
+local flag3  = true     -- master switch (on)
+local flag4  = false    -- orbit mode (not used here)
+local flag6  = false
+local flag7  = false
+local flag8  = false
+local cFrame = nil
+local currentCamera = workspace.CurrentCamera
+local isCountering
+local flag12 = false    -- "ragdoll desync running" flag used by the ragdoll trigger
+local fullConns = {}
+local stopped = false
+
+getgenv().desync = nil
+getgenv().FullAntiHitActive = true
+
+do
+	local flag10 = false
+	local v3 = nil
+	local v4 = nil
+	local v5 = nil
+	local tbl5 = {}
+	local model = Instance.new("Model", workspace)
+	local humanoid = Instance.new("Humanoid", model)
+	local part2 = Instance.new("Part", model)
+	part2.Name = "HumanoidRootPart"
+	part2.CanCollide = false
+	part2.Transparency = 1
+	part2.Anchored = true
+	part2.Size = Vector3.new(2, 2, 1)
+	getgenv().InvisHumanoid = humanoid
+	getgenv().InvisPart30 = part2
+	local flag11 = false
+
+	local function fn10()
+		if not flag11 then
+			return
+		end
+		flag11 = false
+		getgenv().InvisActive = false
+		flag10 = false
+
+		if v3 then
+			pcall(function()
+				if v3.IsPlaying then
+					v3:Stop()
+				end
+			end)
+
+			v3 = nil
+		end
+
+		v4 = nil
+		local character = localPlayer.Character
+
+		if character then
+			local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+
+			if humanoidRootPart and v5 then
+				pcall(function()
+					humanoidRootPart.CFrame = v5
+				end)
+			end
+
+			v5 = nil
+			local humanoid2 = character:FindFirstChildOfClass("Humanoid")
+
+			if humanoid2 then
+				pcall(function()
+					workspace.CurrentCamera.CameraSubject = humanoid2
+				end)
+			end
+
+			pcall(function()
+				character:SetAttribute("NoHeadLerp", false)
+			end)
+
+			for _, v6 in pairs(tbl5) do
+				pcall(function()
+					v6:Disconnect()
+				end)
+			end
+
+			tbl5 = {}
+
+			for _, descendant in pairs(character:GetDescendants()) do
+				if descendant:IsA("BasePart") and descendant.Name ~= "HumanoidRootPart" then
+					descendant.LocalTransparencyModifier = 0
+				end
+			end
+		end
+	end
+
+	local function fn11()
+		if v3 then
+			pcall(function()
+				if v3.IsPlaying then
+					v3:Stop()
+				end
+			end)
+
+			v3 = nil
+		end
+
+		v4 = nil
+		v5 = nil
+		flag10 = false
+	end
+
+	local function fn12(arg)
+		if not arg:IsA("BasePart") then
+			return
+		end
+
+		if arg.Name == "HumanoidRootPart" then
+			return
+		end
+
+		if arg.Transparency == 1 then
+			return
+		end
+
+		if arg.Name:lower():find("hitbox") then
+			return
+		end
+		arg.LocalTransparencyModifier = 0.5
+
+		local connection3 = arg:GetPropertyChangedSignal("LocalTransparencyModifier"):Connect(function()
+			if not flag11 then
+				return
+			end
+
+			if arg.LocalTransparencyModifier ~= 0.5 then
+				arg.LocalTransparencyModifier = 0.5
+			end
+		end)
+
+		table.insert(tbl5, connection3)
+	end
+
+	local function fn13(arg)
+		for _, descendant in pairs(arg:GetDescendants()) do
+			fn12(descendant)
+		end
+
+		local connection3 = arg.DescendantAdded:Connect(function(descendant)
+			if flag11 then
+				fn12(descendant)
+			end
+		end)
+
+		table.insert(tbl5, connection3)
+	end
+
+	local function fn14()
+		if flag11 then
+			fn10()
+			return
+		end
+		local character = localPlayer.Character
+		if not character then
+			return
+		end
+		local humanoid2 = character:FindFirstChildOfClass("Humanoid")
+		local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+		if not humanoid2 or not humanoidRootPart then
+			return
+		end
+		flag11 = true
+		getgenv().InvisActive = true
+		flag10 = false
+		local character2 = localPlayer.Character
+
+		if character2 then
+			fn13(character2)
+		end
+	end
+
+	table.insert(fullConns, RunService.Heartbeat:Connect(function()
+		if not flag3 or getgenv().TFBusy then
+			getgenv().desync = nil
 			return
 		end
 
@@ -151,12 +343,7 @@
 
 		humanoidRootPart.Velocity = velocity
 		flag10 = false
-	end)
-
--- ============================================================
--- 2. DESYNC VISUALS - while desynced: afterimage/teleport particles on you, your body goes 50% transparent.
--- original lines 2080-2190
--- ============================================================
+	end))
 	task.spawn(function()
 		local function fn15(arg)
 			while true do
@@ -269,14 +456,10 @@
 		end)
 	end)
 
--- ============================================================
--- 3. RAGDOLL TRIGGER - a 'Ragdoll' / 'RagdollSim' object appears on your character -> desync until it is removed or you die. Skipped if you have ExtraHitbox.
--- original lines 2450-2472
--- ============================================================
-	local function fn21(arg)
+	local function ragdollHook(arg)
 		local humanoid2 = arg:WaitForChild("Humanoid")
 
-		arg.DescendantAdded:Connect(function(descendant)
+		table.insert(fullConns, arg.DescendantAdded:Connect(function(descendant)
 			if descendant.Name == "Ragdoll" or descendant.Name == "RagdollSim" then
 				if not flag12 and humanoid2.Health > 0 and not arg:FindFirstChild("ExtraHitbox") then
 					task.spawn(function()
@@ -295,338 +478,20 @@
 					end)
 				end
 			end
-		end)
-
--- ============================================================
--- 4. DEATH COUNTER module (vars, helpers, counter detection by 'Counter' accessory, and the 11343250001 animation handler that hides you at -10000y until the counter target dies or 10s)
--- original lines 3826-4140
--- ============================================================
-deathCounterConns = {}
-deathCounterDebounce = {}
-hookedChars = {}
-
-do
-	local flag9 = false
-
-	local function fn8()
-		return 0
+		end))
 	end
 
-	local function fn9(arg)
-		return arg:IsA("Accessory") and arg.Name == "Counter"
-	end
-
-	local flag10 = false
-	local connection = nil
-
-	local function fn10(cFrame2)
-		local character = localPlayer.Character
-		local humanoidRootPart = character and character:FindFirstChild("HumanoidRootPart")
-		if not (character and humanoidRootPart) then
-			return
-		end
-
-		task.spawn(function()
-			RunService.RenderStepped:Once(function()
-				humanoidRootPart.Velocity = Vector3.new()
-				RunService.Heartbeat:Wait()
-				humanoidRootPart.Velocity = Vector3.new()
-			end)
-
-			RunService.Heartbeat:Once(function()
-				humanoidRootPart.CFrame = cFrame2
-			end)
-		end)
-	end
-
-	local function fn11()
-		local character = localPlayer.Character
-		local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-
-		if character and humanoid and workspace.CurrentCamera then
-			local cFrame2 = workspace.CurrentCamera.CFrame
-			workspace.CurrentCamera:Destroy()
-			local camera = Instance.new("Camera", workspace)
-			currentCamera = camera
-			camera.CameraType = Enum.CameraType.Custom
-			camera.CameraSubject = humanoid
-			camera.CFrame = cFrame2
-			localPlayer.CameraMode = Enum.CameraMode.Classic
-			local head = character:FindFirstChild("Head")
-
-			if head then
-				head.Anchored = false
-			end
-		end
-	end
-
-	local function fn12(arg)
-		local ok, result = pcall(function()
-			return arg.DisplayName
-		end)
-
-		if not ok or not result or result == "" then
-			return arg.Name
-		end
-
-		for _, player in pairs(Players:GetPlayers()) do
-			if player ~= arg and player.DisplayName == result then
-				return arg.Name
-			end
-		end
-
-		return result
-	end
-
-	local function fn13(arg)
-		if connection then
-			connection:Disconnect()
-			connection = nil
-		end
-
-		if not arg then
-			return
-		end
-
-		connection = arg.AnimationPlayed:Connect(function(arg2)
-			if not arg2.Animation.AnimationId:match("11343250001") then
-				return
-			end
-			flag9 = true
-
-			task.spawn(function()
-				task.wait(0.2)
-				local v3 = fn8()
-				local flag11 = v3 <= 0
-
-				if v3 <= 0 then
-					pcall(function()
-						arg2:Stop()
-					end)
-				end
-
-				task.spawn(fn11)
-				local character = localPlayer.Character
-				character:WaitForChild("AbsoluteImmortal", 1)
-				local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
-				local cFrame2 = humanoidRootPart.CFrame
-				local v4 = nil
-
-				for _, player in pairs(Players:GetPlayers()) do
-					if player ~= localPlayer then
-						local character2 = player.Character
-						local humanoidRootPart2 = character2 and character2:FindFirstChild("HumanoidRootPart")
-						local humanoid = character2 and character2:FindFirstChildOfClass("Humanoid")
-
-						if character2 and humanoidRootPart2 and humanoid then
-							for _, v5 in pairs(humanoid:GetPlayingAnimationTracks()) do
-								if v5.Animation.AnimationId:match("11343318134") and (humanoidRootPart.Position - humanoidRootPart2.Position).Magnitude <= 15 then
-									v4 = player
-								end
-							end
-						end
-					end
-				end
-
-				local character2
-
-				if v4 then
-					character2 = v4.Character
-					character2 = character2 and character2:FindFirstChildOfClass("Humanoid")
-					fn12(v4)
-				else
-					local model = Instance.new("Model")
-					local humanoid = Instance.new("Humanoid", model)
-					humanoid.Health = 100
-					character2 = humanoid
-
-					task.delay(v3 + 2, function()
-						humanoid.Health = 0
-					end)
-				end
-
-				if v3 > 0 then
-					task.wait(v3)
-					character = localPlayer.Character
-					local humanoidRootPart2 = character and character:FindFirstChild("HumanoidRootPart")
-					if not (character and humanoidRootPart2) then
-						return
-					end
-				end
-
-				local cameraSubject = workspace.CurrentCamera and workspace.CurrentCamera.CameraSubject
-
-				if workspace.CurrentCamera then
-					workspace.CurrentCamera.CameraSubject = nil
-				end
-
-				local humanoid = character:FindFirstChildOfClass("Humanoid")
-				local n9 = CFrame.new(0, -10000, 0) * CFrame.Angles(1.5707963267948966, 0, 0)
-				local now = tick()
-
-				while true do
-					fn10(n9)
-
-					if v3 > 0 and not flag11 then
-						pcall(function()
-							arg2:Stop()
-						end)
-
-						flag11 = true
-					end
-
-					RunService.RenderStepped:Wait()
-					if not (character2 and character2.Health <= 0 or humanoid and humanoid.Health <= 0 or tick() >= now + 10) then
-						continue
-					end
-					break
-				end
-
-				if workspace.CurrentCamera then
-					workspace.CurrentCamera.CameraSubject = cameraSubject
-				end
-
-				fn10(cFrame2)
-				task.wait(1)
-				local character3 = localPlayer.Character
-
-				if character3 then
-					local freeze = character3:FindFirstChild("Freeze")
-					local noRotate = character3:FindFirstChild("NoRotate")
-
-					if freeze then
-						freeze:Destroy()
-					end
-
-					if noRotate then
-						noRotate:Destroy()
-					end
-				end
-
-				task.spawn(fn11)
-				flag9 = false
-			end)
-		end)
-	end
-
-	local function fn14(arg)
-		if not arg then
-			return
-		end
-		local humanoid = arg:FindFirstChildOfClass("Humanoid")
-
-		if humanoid then
-			fn13(humanoid)
-		else
-			task.spawn(function()
-				local humanoid2 = arg:WaitForChild("Humanoid", 5)
-
-				if humanoid2 then
-					fn13(humanoid2)
-				end
-			end)
-		end
-	end
-
-	fn14(localPlayer.Character)
-
-	localPlayer.CharacterAdded:Connect(function(character)
-		task.wait(0.1)
-		fn14(character)
-	end)
-
-	local function fn15(arg, arg2)
-		if not arg or not arg2 or arg2 == localPlayer then
-			return
-		end
-
-		if hookedChars[arg] then
-			return
-		end
-		hookedChars[arg] = true
-
-		for _, child in pairs(arg:GetChildren()) do
-			if fn9(child) then
-				local flag11 = false
-
-				if flag10 then
-					flag11 = not deathCounterDebounce[arg2]
-				end
-
-				if flag11 then
-					deathCounterDebounce[arg2] = true
-				end
-			end
-		end
-
-		local connection2 = arg.ChildAdded:Connect(function(child)
-			if not flag10 then
-				return
-			end
-
-			if not fn9(child) then
-				return
-			end
-
-			if deathCounterDebounce[arg2] then
-				return
-			end
-			deathCounterDebounce[arg2] = true
-		end)
-
-		table.insert(deathCounterConns, connection2)
-	end
-
-	local function fn16(arg)
-		if arg == localPlayer then
-			return
-		end
-
-		if arg.Character then
-			task.spawn(fn15, arg.Character, arg)
-		end
-
-		local connection2 = arg.CharacterAdded:Connect(function(character)
-			if not flag10 then
-				return
-			end
-			task.wait(0.1)
-			fn15(character, arg)
-		end)
-
-		table.insert(deathCounterConns, connection2)
-	end
-
-	for _, v3 in pairs(deathCounterConns) do
-		pcall(v3.Disconnect, v3)
-	end
-
-	for _, player in pairs(Players:GetPlayers()) do
-		fn16(player)
-	end
-
-	table.insert(deathCounterConns, Players.PlayerAdded:Connect(function(player)
-		if flag10 then
-			fn16(player)
-		end
+	if localPlayer.Character then task.spawn(ragdollHook, localPlayer.Character) end
+	table.insert(fullConns, localPlayer.CharacterAdded:Connect(function(char)
+		task.spawn(ragdollHook, char)
 	end))
 
 	local tbl4 = {}
 	local tbl5 = {}
 
-	localPlayer.CharacterAdded:Connect(function()
+	table.insert(fullConns, localPlayer.CharacterAdded:Connect(function()
 		getgenv().desync = nil
-
--- ============================================================
--- 5. isCountering helper + player hook (CharacterAdded resets desync)
--- original lines 4136-4202
--- ============================================================
-	local tbl4 = {}
-	local tbl5 = {}
-
-	localPlayer.CharacterAdded:Connect(function()
-		getgenv().desync = nil
-	end)
+	end))
 
 	isCountering = function(arg)
 		if not arg then
@@ -689,10 +554,6 @@ do
 			return nil
 		end
 
--- ============================================================
--- 6. PREDICT SYSTEM - AnimationPlayed on every other player. Per attack animation id: desync while the attack can reach you (distance check, or a hitbox part touching you), stop after a fixed time / when the animation ends. Includes 11343318134 at the bottom of the list.
--- original lines 4204-5452
--- ============================================================
 		tbl4[arg] = humanoid.AnimationPlayed:Connect(function(arg3)
 			local animationId = arg3.Animation.AnimationId
 			local character = localPlayer.Character
@@ -1942,11 +1803,6 @@ do
 		end)
 	end
 
-
--- ============================================================
--- 7. HOOKING every player (fn18 loop, PlayerAdded / PlayerRemoving)
--- original lines 5453-5500
--- ============================================================
 	local function fn18(arg)
 		if arg == localPlayer then
 			return
@@ -1965,7 +1821,7 @@ do
 		task.spawn(fn18, player)
 	end
 
-	Players.PlayerAdded:Connect(function(player)
+	table.insert(fullConns, Players.PlayerAdded:Connect(function(player)
 		if player == localPlayer then
 			return
 		end
@@ -1991,27 +1847,51 @@ do
 				end)
 			end
 		end)
-	end)
+	end))
 
-	Players.PlayerRemoving:Connect(function(player)
+	table.insert(fullConns, Players.PlayerRemoving:Connect(function(player)
 		if tbl4[player] then
+			pcall(function()
+				tbl4[player]:Disconnect()
+			end)
 
--- ============================================================
--- 8. FAILSAFE - desync is force-cleared after 20 s
--- original lines 6069-6083
--- ============================================================
-task.spawn(function()
-	while true do
-		if getgenv().desync then
-			local now = tick()
-
-			repeat
-				task.wait()
-			until tick() - now >= 20 or not getgenv().desync
-
-			getgenv().desync = nil
+			tbl4[player] = nil
 		end
 
-		RunService.RenderStepped:Wait()
+		if tbl5[player] then
+			pcall(function()
+				tbl5[player]:Disconnect()
+			end)
+
+			tbl5[player] = nil
+		end
+	end))
+task.spawn(function()
+		while not stopped do
+			if getgenv().desync then
+				local now = tick()
+	
+				repeat
+					task.wait()
+				until tick() - now >= 20 or not getgenv().desync
+	
+				getgenv().desync = nil
+			end
+	
+			RunService.RenderStepped:Wait()
+		end
+	end)
+	-- the original's death-counter module also gave tbl4/tbl5 their locals: they are declared above
+	getgenv().FullAntiHitStop = function()
+		stopped = true
+		flag3 = false
+		getgenv().desync = nil
+		getgenv().FullAntiHitActive = nil
+		for _, c in ipairs(fullConns) do pcall(function() c:Disconnect() end) end
+		fullConns = {}
+		for _, c in pairs(tbl4) do pcall(function() c:Disconnect() end) end
+		for _, c in pairs(tbl5) do pcall(function() c:Disconnect() end) end
+		tbl4, tbl5 = {}, {}
+		pcall(function() model:Destroy() end)
 	end
-end)
+end
