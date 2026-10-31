@@ -33,6 +33,7 @@ local isCountering
 local flag12 = false    -- "ragdoll desync running" flag used by the ragdoll trigger
 local fullConns = {}
 local stopped = false
+local lastDesyncT = 0   -- last time the engine used the fake camera humanoid
 
 getgenv().desync = nil
 getgenv().FullAntiHitActive = true
@@ -237,6 +238,7 @@ do
 
 		local cFrame2 = humanoidRootPart.CFrame
 		local velocity = humanoidRootPart.Velocity
+		local angVel = humanoidRootPart.AssemblyAngularVelocity
 		v5 = cFrame2
 		local currentCamera2 = workspace.CurrentCamera
 		local flag13 = flag12 and not localPlayer.Character:FindFirstChild("AbsoluteImmortal")
@@ -248,6 +250,7 @@ do
 		end
 
 		if cFrame3 then
+			lastDesyncT = tick()
 			local flag14
 
 			if currentCamera2 then
@@ -342,6 +345,7 @@ do
 		end
 
 		humanoidRootPart.Velocity = velocity
+		humanoidRootPart.AssemblyAngularVelocity = angVel
 		flag10 = false
 	end))
 	task.spawn(function()
@@ -484,6 +488,21 @@ do
 	if localPlayer.Character then task.spawn(ragdollHook, localPlayer.Character) end
 	table.insert(fullConns, localPlayer.CharacterAdded:Connect(function(char)
 		task.spawn(ragdollHook, char)
+	end))
+
+
+	-- Camera hand-back (NOT in the original anti-hit: the original script resets it elsewhere).
+	-- While desynced the engine points the camera at a fake humanoid. When the desync is over the camera
+	-- must go back to your real humanoid, or it stays frozen on the fake one.
+	table.insert(fullConns, RunService.RenderStepped:Connect(function()
+		local cam = workspace.CurrentCamera
+		local char = localPlayer.Character
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		if not cam or not hum then return end
+		if cam.CameraSubject == humanoid and tick() - lastDesyncT > 0.15 then
+			cam.CameraSubject = hum
+			pcall(function() char:SetAttribute("NoHeadLerp", false) end)
+		end
 	end))
 
 	local tbl4 = {}
