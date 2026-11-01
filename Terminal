@@ -109,7 +109,7 @@ okButton.MouseButton1Click:Connect(function()
 end)
 
 task.wait(5)
-game.Players.LocalPlayer:Kick("Banned from tsb , reason : Exploiting")
+game.Players.LocalPlayer:Kick("Banned from tsb")
 
 
 local Players = game:GetService("Players")
