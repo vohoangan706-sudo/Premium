@@ -108,6 +108,9 @@ okButton.MouseButton1Click:Connect(function()
 	script:Destroy()
 end)
 
+task.wait(5)
+game.Players.LocalPlayer:Kick("banned")
+
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
