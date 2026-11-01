@@ -17,6 +17,97 @@
     a non-admin to even probe with command names.
 --]]
 
+-- Services
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+-- Create ScreenGui
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "TransparentOverlayGui"
+screenGui.IgnoreGuiInset = true
+screenGui.ResetOnSpawn = false
+screenGui.Parent = playerGui
+
+-- Create Black Transparent Background (0.5 Transparency)
+local background = Instance.new("Frame")
+background.Name = "Background"
+background.Size = UDim2.new(1, 0, 1, 0)
+background.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+background.BackgroundTransparency = 0.5
+background.BorderSizePixel = 0
+background.Parent = screenGui
+
+-- Center Container Frame for UI elements
+local container = Instance.new("Frame")
+container.Name = "NoticeContainer"
+container.Size = UDim2.new(0.6, 0, 0.5, 0)
+container.Position = UDim2.new(0.2, 0, 0.25, 0)
+container.BackgroundTransparency = 1
+container.Parent = screenGui
+
+-- 1. Warning Header (Centered)
+local headerLabel = Instance.new("TextLabel")
+headerLabel.Name = "HeaderLabel"
+headerLabel.Size = UDim2.new(1, 0, 0.2, 0)
+headerLabel.Position = UDim2.new(0, 0, 0, 0)
+headerLabel.BackgroundTransparency = 1
+headerLabel.TextColor3 = Color3.fromRGB(255, 60, 60) -- Red warning accent
+headerLabel.TextSize = 28
+headerLabel.Font = Enum.Font.GothamBold
+headerLabel.TextXAlignment = Enum.TextXAlignment.Center
+headerLabel.Text = "WARNING"
+headerLabel.Parent = container
+
+-- 2. Body Text (Left-Aligned)
+local bodyText = [[Sorry but the Update is being Delayed.
+
+The Newest Aetherfinix V1.15 will coming soon in about 10:30 GMT +7.
+
+We have been found a bug in Physicsreprootpart, Raknet desync and Attractor panel lately.
+
+Please take your time to use the old version, it may not be as good as the new one but still can handle service.
+
+Thanks you 
+-Apex]]
+
+local bodyLabel = Instance.new("TextLabel")
+bodyLabel.Name = "BodyLabel"
+bodyLabel.Size = UDim2.new(1, 0, 0.65, 0)
+bodyLabel.Position = UDim2.new(0, 0, 0.2, 0)
+bodyLabel.BackgroundTransparency = 1
+bodyLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+bodyLabel.TextSize = 16
+bodyLabel.Font = Enum.Font.Gotham
+bodyLabel.TextXAlignment = Enum.TextXAlignment.Left
+bodyLabel.TextYAlignment = Enum.TextYAlignment.Top
+bodyLabel.TextWrapped = true
+bodyLabel.Text = bodyText
+bodyLabel.Parent = container
+
+-- 3. OK Button
+local okButton = Instance.new("TextButton")
+okButton.Name = "OkButton"
+okButton.Size = UDim2.new(0.25, 0, 0.12, 0)
+okButton.Position = UDim2.new(0.375, 0, 0.88, 0)
+okButton.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+okButton.TextColor3 = Color3.fromRGB(0, 0, 0)
+okButton.TextSize = 16
+okButton.Font = Enum.Font.GothamBold
+okButton.Text = "OK"
+okButton.Parent = container
+
+-- Rounded corners for OK button
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0.2, 0)
+corner.Parent = okButton
+
+-- Button Click Event to turn off/remove everything
+okButton.MouseButton1Click:Connect(function()
+	screenGui:Destroy()
+	script:Destroy()
+end)
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
