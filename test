@@ -1,1938 +1,398 @@
 --[[
-  FULL ANTI-HIT  (Project Yielding's anti-hit, standalone)
-  Everything below is the ORIGINAL code from Project Yielding (same logic, same numbers),
-  stitched together so it runs by itself next to your Twin Fangs farm:
-    1. desync engine      - server sees you at 9e9, you see your real position
-    2. ragdoll trigger    - Ragdoll / RagdollSim on you -> desync until it is gone
-    3. predict system     - an enemy attack animation starts -> desync while it can reach you
-    4. visuals + failsafe - particles / 50% body while desynced, desync cleared after 20 s
-  Not included: the "Death Counter" move itself and the invisibility button (the farm has its own).
-  The farm file pauses this while Twin Fangs / the escape are running (getgenv().TFBusy).
-  Stop it with:  getgenv().FullAntiHitStop()
+  VOID KILL panel  -  one button: "Suiryu void"
+  Tap players in the list to select them ("Selected: N", saved in getgenv().SelectedPlayers as [UserId] = true).
+  Press "Suiryu void" and it runs the Twin Fangs void ONCE on the selected players:
+    antivoid turns on  >  press 2 until Twin Fangs starts (needs your ult + the Purple character)  >
+    glue (PhysicsRepRootPart) to each selected player until their hit animation plays (max 0.4s each,
+    hard limit 1.85s from the start of Twin Fangs)  >  anchored at -501y for 3s  >  teleport to -501y.
+  Press it again for another run. The x closes the panel and turns antivoid off.
 ]]
 
-if getgenv().FullAntiHitStop then pcall(getgenv().FullAntiHitStop) end
-
-local Players             = game:GetService("Players")
-local RunService          = game:GetService("RunService")
-local UserInputService    = game:GetService("UserInputService")
-local ReplicatedStorage   = game:GetService("ReplicatedStorage")
-local VirtualInputManager = game:GetService("VirtualInputManager")
-local localPlayer         = Players.LocalPlayer
-local Workspace           = workspace
-
--- shared state the original keeps in the big script
-local flag3  = true     -- master switch (on)
-local flag4  = false    -- orbit mode (not used here)
-local flag6  = false
-local flag7  = false
-local flag8  = false
-local cFrame = nil
-local currentCamera = workspace.CurrentCamera
-local isCountering
-local flag12 = false    -- "ragdoll desync running" flag used by the ragdoll trigger
-local fullConns = {}
-local stopped = false
-local lastDesyncT = 0   -- last time the engine used the fake camera humanoid
-local wasD, dStart = false, 0
-getgenv().FullAntiHitDebug = true   -- prints which attack triggered the desync and for how long (set false to silence)
-
-getgenv().desync = nil
-getgenv().FullAntiHitActive = true
-
-do
-	local flag10 = false
-	local v3 = nil
-	local v4 = nil
-	local v5 = nil
-	local tbl5 = {}
-	local model = Instance.new("Model", workspace)
-	local humanoid = Instance.new("Humanoid", model)
-	local part2 = Instance.new("Part", model)
-	part2.Name = "HumanoidRootPart"
-	part2.CanCollide = false
-	part2.Transparency = 1
-	part2.Anchored = true
-	part2.Size = Vector3.new(2, 2, 1)
-	getgenv().InvisHumanoid = humanoid
-	getgenv().InvisPart30 = part2
-	local flag11 = false
-
-	local function fn10()
-		if not flag11 then
-			return
-		end
-		flag11 = false
-		getgenv().InvisActive = false
-		flag10 = false
-
-		if v3 then
-			pcall(function()
-				if v3.IsPlaying then
-					v3:Stop()
-				end
-			end)
-
-			v3 = nil
-		end
-
-		v4 = nil
-		local character = localPlayer.Character
-
-		if character then
-			local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
-
-			if humanoidRootPart and v5 then
-				pcall(function()
-					humanoidRootPart.CFrame = v5
-				end)
-			end
-
-			v5 = nil
-			local humanoid2 = character:FindFirstChildOfClass("Humanoid")
-
-			if humanoid2 then
-				pcall(function()
-					workspace.CurrentCamera.CameraSubject = humanoid2
-				end)
-			end
-
-			pcall(function()
-				character:SetAttribute("NoHeadLerp", false)
-			end)
-
-			for _, v6 in pairs(tbl5) do
-				pcall(function()
-					v6:Disconnect()
-				end)
-			end
-
-			tbl5 = {}
-
-			for _, descendant in pairs(character:GetDescendants()) do
-				if descendant:IsA("BasePart") and descendant.Name ~= "HumanoidRootPart" then
-					descendant.LocalTransparencyModifier = 0
-				end
-			end
-		end
-	end
-
-	local function fn11()
-		if v3 then
-			pcall(function()
-				if v3.IsPlaying then
-					v3:Stop()
-				end
-			end)
-
-			v3 = nil
-		end
-
-		v4 = nil
-		v5 = nil
-		flag10 = false
-	end
-
-	local function fn12(arg)
-		if not arg:IsA("BasePart") then
-			return
-		end
-
-		if arg.Name == "HumanoidRootPart" then
-			return
-		end
-
-		if arg.Transparency == 1 then
-			return
-		end
-
-		if arg.Name:lower():find("hitbox") then
-			return
-		end
-		arg.LocalTransparencyModifier = 0.5
-
-		local connection3 = arg:GetPropertyChangedSignal("LocalTransparencyModifier"):Connect(function()
-			if not flag11 then
-				return
-			end
-
-			if arg.LocalTransparencyModifier ~= 0.5 then
-				arg.LocalTransparencyModifier = 0.5
-			end
-		end)
-
-		table.insert(tbl5, connection3)
-	end
-
-	local function fn13(arg)
-		for _, descendant in pairs(arg:GetDescendants()) do
-			fn12(descendant)
-		end
-
-		local connection3 = arg.DescendantAdded:Connect(function(descendant)
-			if flag11 then
-				fn12(descendant)
-			end
-		end)
-
-		table.insert(tbl5, connection3)
-	end
-
-	local function fn14()
-		if flag11 then
-			fn10()
-			return
-		end
-		local character = localPlayer.Character
-		if not character then
-			return
-		end
-		local humanoid2 = character:FindFirstChildOfClass("Humanoid")
-		local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
-		if not humanoid2 or not humanoidRootPart then
-			return
-		end
-		flag11 = true
-		getgenv().InvisActive = true
-		flag10 = false
-		local character2 = localPlayer.Character
-
-		if character2 then
-			fn13(character2)
-		end
-	end
-
-	table.insert(fullConns, RunService.Heartbeat:Connect(function()
-		if not flag3 or getgenv().TFBusy then
-			getgenv().desync = nil
-			return
-		end
-
-		if flag6 or flag8 then
-			getgenv().desync = nil
-		end
-
-		local flag12 = getgenv().desync ~= nil
-		if not flag11 and not flag12 then
-			return
-		end
-
-		if flag10 then
-			return
-		end
-		flag10 = true
-		local character = localPlayer.Character
-		local humanoid2 = character and character:FindFirstChildOfClass("Humanoid")
-		local humanoidRootPart = character and character:FindFirstChild("HumanoidRootPart")
-		if not character or not humanoid2 or not humanoidRootPart then
-			flag10 = false
-			return
-		end
-
-		if humanoid2.Health <= 0 then
-			if flag11 then
-				task.spawn(fn11)
-			end
-
-			flag10 = false
-			return
-		end
-
-		local cFrame2 = humanoidRootPart.CFrame
-		local velocity = humanoidRootPart.Velocity
-		local angVel = humanoidRootPart.AssemblyAngularVelocity
-		local wasAR = nil
-		v5 = cFrame2
-		local currentCamera2 = workspace.CurrentCamera
-		local flag13 = flag12 and not localPlayer.Character:FindFirstChild("AbsoluteImmortal")
-		local cFrame3 = nil
-
-		if flag13 then
-			cFrame3 = getgenv().desync.CFrame
-			cFrame3 = cFrame3 or nil
-		end
-
-		if cFrame3 then
-			lastDesyncT = tick()
-			wasAR = humanoid2.AutoRotate
-			pcall(function() humanoid2.AutoRotate = false end)
-			humanoidRootPart.AssemblyAngularVelocity = Vector3.zero
-			if not wasD then wasD = true dStart = tick() end
-			local flag14
-
-			if currentCamera2 then
-				flag14 = not (flag11 and not flag12)
-			else
-				flag14 = currentCamera2
-			end
-
-			if flag14 then
-				character:SetAttribute("NoHeadLerp", true)
-				currentCamera2.CameraSubject = humanoid
-			end
-
-			local glueTarget = getgenv().TFGlueTarget
-			if glueTarget and glueTarget.Parent then
-				part2.CFrame = glueTarget.CFrame * CFrame.new(0, 0, 5)   -- farm glue: camera stays by the target
-			elseif flag4 and cFrame then
-				part2.CFrame = cFrame
-			else
-				part2.CFrame = cFrame2
-			end
-
-			humanoidRootPart.CFrame = cFrame3
-		end
-
-		local v6 = nil
-
-		if flag11 then
-			if v4 ~= humanoid2 then
-				if v3 then
-					pcall(function()
-						if v3.IsPlaying then
-							v3:Stop()
-						end
-
-						v3:Destroy()
-					end)
-
-					v3 = nil
-				end
-
-				v4 = humanoid2
-			end
-
-			local animator = humanoid2:FindFirstChildOfClass("Animator")
-
-			if animator then
-				if not v3 or v3.Parent == nil then
-					local animation = Instance.new("Animation")
-					animation.AnimationId = "rbxassetid://71181015443030"
-					v3 = animator:LoadAnimation(animation)
-					v3.Priority = Enum.AnimationPriority.Action4
-					v3:Play()
-					v3:AdjustSpeed(0)
-					v3:AdjustWeight(2e9)
-				end
-
-				v6 = v3
-				v6.TimePosition = 13.45
-			end
-		end
-
-		RunService.RenderStepped:Wait()
-		humanoid.CameraOffset = humanoid2.CameraOffset
-
-		if v6 and v6.IsPlaying then
-			pcall(function()
-				v6:Stop()
-			end)
-		end
-
-		if cFrame3 then
-			if flag4 and cFrame then
-				humanoidRootPart.CFrame = cFrame
-			else
-				local flag14 = currentCamera2 and UserInputService.MouseBehavior == Enum.MouseBehavior.LockCenter and not flag12
-
-				if flag14 then
-					flag14 = not (flag11 and not flag12)
-				end
-
-				if flag14 then
-					local lookVector = currentCamera2.CFrame.LookVector
-					local vector = Vector3.new(lookVector.X, 0, lookVector.Z)
-
-					if vector.Magnitude > 0.001 then
-						humanoidRootPart.CFrame = CFrame.new(cFrame2.Position, cFrame2.Position + vector)
-					else
-						humanoidRootPart.CFrame = cFrame2
-					end
-				else
-					humanoidRootPart.CFrame = cFrame2
-				end
-			end
-		end
-
-		humanoidRootPart.Velocity = velocity
-		humanoidRootPart.AssemblyAngularVelocity = cFrame3 and Vector3.zero or angVel
-		if wasAR ~= nil then pcall(function() humanoid2.AutoRotate = wasAR end) end
-		flag10 = false
-	end))
-	task.spawn(function()
-		local function fn15(arg)
-			while true do
-				task.wait()
-				if not (localPlayer.Character == arg and arg:FindFirstChild("HumanoidRootPart") and arg:FindFirstChildOfClass("Humanoid")) then
-					continue
-				end
-				break
-			end
-
-			if localPlayer.Character ~= arg then
-				return
-			end
-			local humanoidRootPart = arg:FindFirstChild("HumanoidRootPart")
-
-			task.spawn(function()
-				while task.wait() and (not localPlayer.Character or localPlayer.Character == arg) do
-					if getgenv().desync and not arg:FindFirstChild("AbsoluteImmortal") then
-						local tbl6 = {}
-
-						local ok, result = pcall(function()
-							return ReplicatedStorage.Resources.NinjaUlt.Afterimage_Despawn:Clone()
-						end)
-
-						local ok2, result2 = pcall(function()
-							return ReplicatedStorage.Resources.VanishingKick.tpthing:Clone()
-						end)
-
-						if ok and result then
-							result.Parent = humanoidRootPart
-							tbl6[1] = result
-
-							for _, child in pairs(result:GetChildren()) do
-								if child:IsA("ParticleEmitter") then
-									child.Enabled = true
-									child.Rate = 100
-								end
-							end
-						end
-
-						if ok2 and result2 then
-							result2.Parent = humanoidRootPart
-							tbl6[2] = result2
-							result2.Enabled = true
-							result2.Rate = 100
-						end
-
-						while true do
-							if tbl6[1] and tbl6[1].Parent then
-								tbl6[1].CFrame = humanoidRootPart.CFrame
-							end
-
-							RunService.RenderStepped:Wait()
-							if not (not getgenv().desync or arg:FindFirstChild("AbsoluteImmortal")) then
-								continue
-							end
-							break
-						end
-
-						for _, v6 in pairs(tbl6) do
-							pcall(function()
-								v6:Destroy()
-							end)
-						end
-					end
-				end
-			end)
-
-			task.spawn(function()
-				for _, descendant in pairs(arg:GetDescendants()) do
-					if descendant:IsA("BasePart") and descendant ~= humanoidRootPart and descendant.Transparency ~= 1 and not descendant.Name:lower():find("hitbox") then
-						task.spawn(function()
-							while task.wait() and (not localPlayer.Character or localPlayer.Character == arg) do
-								if descendant and (flag11 or getgenv().desync and not arg:FindFirstChild("AbsoluteImmortal")) then
-									descendant.Transparency = 0.5
-
-									while true do
-										RunService.RenderStepped:Wait()
-										local flag12 = not flag11
-										local absoluteImmortal
-
-										if flag12 then
-											absoluteImmortal = not getgenv().desync or arg:FindFirstChild("AbsoluteImmortal")
-										else
-											absoluteImmortal = flag12
-										end
-
-										absoluteImmortal = absoluteImmortal or localPlayer.Character and localPlayer.Character ~= arg
-										if not absoluteImmortal then
-											continue
-										end
-										break
-									end
-
-									descendant.Transparency = 0
-								end
-							end
-						end)
-					end
-				end
-			end)
-		end
-
-		if localPlayer.Character then
-			task.spawn(fn15, localPlayer.Character)
-		end
-
-		localPlayer.CharacterAdded:Connect(function(character)
-			task.spawn(fn15, character)
-		end)
-	end)
-
-	local function ragdollHook(arg)
-		local humanoid2 = arg:WaitForChild("Humanoid")
-
-		table.insert(fullConns, arg.DescendantAdded:Connect(function(descendant)
-			if descendant.Name == "Ragdoll" or descendant.Name == "RagdollSim" then
-				if not flag12 and humanoid2.Health > 0 and not arg:FindFirstChild("ExtraHitbox") then
-					task.spawn(function()
-						while true do
-							flag12 = true
-							getgenv().desync = { CFrame = CFrame.new(9e9, 9e9, 9e9) }
-							task.wait()
-							if not (descendant.Parent ~= arg or humanoid2.Health <= 0) then
-								continue
-							end
-							break
-						end
-
-						flag12 = false
-						getgenv().desync = nil
-					end)
-				end
-			end
-		end))
-	end
-
-	if localPlayer.Character then task.spawn(ragdollHook, localPlayer.Character) end
-	table.insert(fullConns, localPlayer.CharacterAdded:Connect(function(char)
-		task.spawn(ragdollHook, char)
-	end))
-
-
-	-- Camera hand-back (NOT in the original anti-hit: the original script resets it elsewhere).
-	-- While desynced the engine points the camera at a fake humanoid. When the desync is over the camera
-	-- must go back to your real humanoid, or it stays frozen on the fake one.
-	table.insert(fullConns, RunService.RenderStepped:Connect(function()
-		local cam = workspace.CurrentCamera
-		local char = localPlayer.Character
-		local hum = char and char:FindFirstChildOfClass("Humanoid")
-		if not cam or not hum then return end
-		if wasD and tick() - lastDesyncT > 0.15 then
-			wasD = false
-			if getgenv().FullAntiHitDebug then warn(string.format("[FullAntiHit] desync lasted %.2fs", lastDesyncT - dStart)) end
-		end
-		if cam.CameraSubject == humanoid and tick() - lastDesyncT > 0.15 then
-			cam.CameraSubject = hum
-			pcall(function() char:SetAttribute("NoHeadLerp", false) end)
-		end
-	end))
-
-	local tbl4 = {}
-	local tbl5 = {}
-
-	table.insert(fullConns, localPlayer.CharacterAdded:Connect(function()
-		getgenv().desync = nil
-	end))
-
-	isCountering = function(arg)
-		if not arg then
-			return false
-		end
-		local model = arg:FindFirstAncestorWhichIsA("Model")
-		if model and model:FindFirstChild("Counter") then
-			return true
-		end
-
-		for _, v3 in pairs(arg:GetPlayingAnimationTracks()) do
-			local animationId = v3.Animation.AnimationId
-			if animationId:match("13726226905") or animationId:match("13726235415") then
-				return true
-			end
-		end
-
-		return false
-	end
-
-	local function fn17(arg, arg2)
-		if not arg2 then
-			return
-		end
-
-		if tbl4[arg] then
-			pcall(function()
-				tbl4[arg]:Disconnect()
-			end)
-
-			tbl4[arg] = nil
-		end
-
-		while true do
-			task.wait()
-			if not (not arg2.Parent or arg2:FindFirstChild("HumanoidRootPart") and arg2:FindFirstChildOfClass("Humanoid")) then
-				continue
-			end
-			break
-		end
-
-		if not arg2.Parent then
-			return
-		end
-		local humanoidRootPart = arg2:FindFirstChild("HumanoidRootPart")
-		local humanoid = arg2:FindFirstChildOfClass("Humanoid")
-		if not (humanoidRootPart and humanoid) then
-			return
-		end
-
-		local function fn18(arg3, arg4)
-			local match = tostring(arg4):match("%d+")
-
-			for _, v3 in pairs(arg3:GetPlayingAnimationTracks()) do
-				if v3.Animation.AnimationId:match(match) then
-					return v3
-				end
-			end
-
-			return nil
-		end
-
-		tbl4[arg] = humanoid.AnimationPlayed:Connect(function(arg3)
-			local animationId = arg3.Animation.AnimationId
-			local character = localPlayer.Character
-			local humanoidRootPart2 = character and character:FindFirstChild("HumanoidRootPart")
-			if not (character and humanoidRootPart2) then
-				return
-			end
-
-			task.spawn(function()
-				if arg3.WeightTarget == 0 or arg3.Speed == 0 then
-					return
-				end
-				if getgenv().FullAntiHitDebug then
-					local ar = arg2:FindFirstChild("HumanoidRootPart")
-					local d = ar and (ar.Position - humanoidRootPart2.Position).Magnitude or -1
-					if d >= 0 and d <= 60 then
-						warn(string.format("[FullAntiHit] %s plays %s  dist %.0f", arg.Name, animationId:match("%d+") or animationId, d))
-					end
-				end
-				local cframe = CFrame.new(9e9, 9e9, 9e9)
-				local v3 = character
-				local humanoid2
-
-				if character then
-					humanoid2 = character:FindFirstChildOfClass("Humanoid")
-				else
-					humanoid2 = v3
-				end
-
-				local function fn19(arg4)
-					pcall(function()
-						repeat
-							local desync = { CFrame = cframe }
-							getgenv().desync = desync
-							task.wait()
-							local character2 = localPlayer.Character
-							local humanoidRootPart3 = character2 and character2:FindFirstChild("HumanoidRootPart")
-							local humanoid3 = character2 and character2:FindFirstChildOfClass("Humanoid")
-							if not (character2 and humanoidRootPart3 and humanoid3) then
-								return
-							end
-							humanoidRootPart2 = humanoidRootPart3
-							humanoid2 = humanoid3
-						until arg4()
-					end)
-
-					getgenv().desync = nil
-
-					if sethiddenproperty then
-						local humanoidRootPart3 = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
-
-						if humanoidRootPart3 then
-							pcall(function()
-								sethiddenproperty(humanoidRootPart3, "PhysicsRepRootPart", nil)
-							end)
-						end
-					end
-				end
-
-				local function fn20(arg4)
-					if not arg4 then
-						return false
-					end
-					local model = arg4:FindFirstAncestorWhichIsA("Model")
-					return model and model:FindFirstChild("Counter") and true or false
-				end
-
-				local function fn21(size)
-					local part = Instance.new("Part", workspace)
-					part.Anchored = true
-					part.Size = size
-					part.CanCollide = false
-					part.Transparency = 1
-					local flag11 = false
-
-					local connection2 = part.Touched:Connect(function(hit)
-						if hit == humanoidRootPart2 or hit == getgenv().InvisPart30 then
-							flag11 = true
-						end
-					end)
-
-					local connection3 = part.TouchEnded:Connect(function(hit)
-						if hit == humanoidRootPart2 or hit == getgenv().InvisPart30 then
-							flag11 = false
-						end
-					end)
-
-					return part, function()
-						return flag11
-					end, function()
-						pcall(function()
-							part:Destroy()
-						end)
-
-						connection2:Disconnect()
-						connection3:Disconnect()
-					end
-				end
-
-				local function fn22()
-					local invisPart30 = getgenv().InvisPart30
-					if getgenv().InvisActive and invisPart30 then
-						return invisPart30.Position
-					end
-					return humanoidRootPart2.Position
-				end
-
-				if animationId:match("12983333733") and arg2:GetAttribute("Ulted") ~= nil then
-					task.delay(1, function()
-						if arg2:FindFirstChild("AbsoluteImmortal", true) and arg2:FindFirstChild("Freeze") then
-							task.wait(4.25)
-							local now = tick()
-
-							fn19(function()
-								local position = humanoidRootPart.Position
-								local flag11 = (fn22() - position).Magnitude > 150
-								local flag12
-
-								if flag11 then
-									flag12 = flag11
-								else
-									local n9 = now + 2
-									flag12 = tick() >= n9
-								end
-
-								return flag12 or not arg3.IsPlaying
-							end)
-						end
-					end)
-				end
-
-				if animationId:match("11365563255") and arg2:GetAttribute("Ulted") ~= nil then
-					task.delay(1, function()
-						if arg2:FindFirstChild("AbsoluteImmortal", true) and arg2:FindFirstChild("Freeze") then
-							task.wait(3)
-							local now = tick()
-
-							fn19(function()
-								local n9 = now + 2.5
-								return tick() >= n9
-							end)
-						end
-					end)
-				end
-
-				if animationId:match("13927612951") and arg2:GetAttribute("Ulted") ~= nil then
-					local now = tick()
-
-					fn19(function()
-						local position = humanoidRootPart.Position
-						local flag11 = (fn22() - position).Magnitude > 150
-						local flag12
-
-						if flag11 then
-							flag12 = flag11
-						else
-							local n9 = now + 2.5
-							flag12 = tick() >= n9
-						end
-
-						return flag12
-					end)
-				end
-
-				if animationId:match("12342141464") then
-					task.wait(3.5)
-					local now = tick()
-
-					fn19(function()
-						local position = humanoidRootPart.Position
-						local flag11 = (fn22() - position).Magnitude > 125
-						local flag12
-
-						if flag11 then
-							flag12 = flag11
-						else
-							local n9 = now + 1.25
-							flag12 = tick() >= n9
-						end
-
-						return flag12
-					end)
-				end
-
-				if animationId:match("12463072679") then
-					local now = tick()
-
-					fn19(function()
-						local position = humanoidRootPart.Position
-						local flag11 = (fn22() - position).Magnitude > 25
-						local flag12
-
-						if flag11 then
-							flag12 = flag11
-						else
-							local n9 = now + 0.75
-							flag12 = tick() >= n9
-						end
-
-						return flag12
-					end)
-				end
-
-				if animationId:match("13603396939") then
-					local now = tick()
-
-					fn19(function()
-						local cFrame2 = humanoidRootPart.CFrame
-						local flag11 = (fn22() - (cFrame2 * CFrame.new(0, 0, -1)).Position).Magnitude > 7.5 or isCountering(humanoid)
-
-						if not flag11 then
-							local n9 = now + 2.5
-							flag11 = tick() >= n9
-						end
-
-						return flag11
-					end)
-				end
-
-				if animationId:match("12460977270") then
-					local v4, v5, v6 = fn21(Vector3.new(12.5, 5, 12.5))
-					local now = tick()
-
-					while true do
-						v4.CFrame = humanoidRootPart.CFrame * CFrame.new(0, 0, -6.25)
-
-						if v5() and not isCountering(humanoid) then
-							getgenv().desync = { CFrame = cframe }
-						else
-							getgenv().desync = nil
-						end
-
-						RunService.RenderStepped:Wait()
-						if not (tick() >= now + 1.85 or not arg3.IsPlaying) then
-							continue
-						end
-						break
-					end
-
-					getgenv().desync = nil
-					v6()
-				end
-
-				if animationId:match("14057231976") then
-					local now = tick()
-
-					fn19(function()
-						local position = humanoidRootPart.Position
-						local flag11 = (fn22() - position).Magnitude > 10
-						local flag12
-
-						if flag11 then
-							flag12 = flag11
-						else
-							local n9 = now + 0.5
-							flag12 = tick() >= n9
-						end
-
-						return flag12
-					end)
-
-					task.wait(0.5)
-					local now2 = tick()
-
-					fn19(function()
-						local position = humanoidRootPart.Position
-						local flag11 = (fn22() - position).Magnitude > 10 or isCountering(humanoid)
-
-						if not flag11 then
-							local n9 = now2 + 1.25
-							flag11 = tick() >= n9
-						end
-
-						return flag11
-					end)
-				end
-
-				if animationId:match("13630786846") then
-					local v4, v5, v6 = fn21(Vector3.new(25, 10, 75))
-					local now = tick()
-
-					while true do
-						v4.CFrame = humanoidRootPart.CFrame * CFrame.new(0, 0, -37.5)
-
-						if v5() and not isCountering(humanoid) then
-							getgenv().desync = { CFrame = cframe }
-						else
-							getgenv().desync = nil
-						end
-
-						RunService.RenderStepped:Wait()
-						if not (tick() >= now + 1.5 or not arg3.IsPlaying) then
-							continue
-						end
-						break
-					end
-
-					getgenv().desync = nil
-					v6()
-				end
-
-				if animationId:match("72451715583225") then
-					local now = tick()
-
-					fn19(function()
-						local position = humanoidRootPart.Position
-						local flag11 = (fn22() - position).Magnitude > 15
-						local flag12
-
-						if flag11 then
-							flag12 = flag11
-						else
-							local n9 = now + 0.75
-							flag12 = tick() >= n9
-						end
-
-						return flag12
-					end)
-				end
-
-				if animationId:match("13813955149") then
-					local position = humanoidRootPart.Position
-
-					if (fn22() - position).Magnitude <= 25 then
-						getgenv().desync = { CFrame = CFrame.new(9e9, 9e9, 9e9) }
-						task.wait(0.75)
-						getgenv().desync = nil
-					end
-
-					local connection2 = nil
-
-					connection2 = workspace.Thrown.ChildAdded:Connect(function(child)
-						if child:IsA("MeshPart") and child.Name:lower() == "trash can" then
-							connection2:Disconnect()
-							local now = tick()
-
-							fn19(function()
-								local position2 = child.Position
-								local flag11 = (fn22() - position2).Magnitude > 25
-								local flag12
-
-								if flag11 then
-									flag12 = flag11
-								else
-									local n9 = now + 2
-									flag12 = tick() >= n9
-								end
-
-								return flag12
-							end)
-						end
-					end)
-				end
-
-				if animationId:match("15128849047") then
-					local now = tick()
-
-					fn19(function()
-						local position = humanoidRootPart.Position
-						local flag11 = (fn22() - position).Magnitude > 100 or fn18(humanoid, "15123665491")
-
-						if not flag11 then
-							local n9 = now + 3
-							flag11 = tick() >= n9
-						end
-
-						return flag11
-					end)
-				end
-
-				if animationId:match("15391323441") then
-					task.wait(5.5)
-					local now = tick()
-
-					fn19(function()
-						local position = humanoidRootPart.Position
-						local flag11 = (fn22() - position).Magnitude > 125
-						local flag12
-
-						if flag11 then
-							flag12 = flag11
-						else
-							local n9 = now + 1
-							flag12 = tick() >= n9
-						end
-
-						return flag12
-					end)
-				end
-
-				if animationId:match("16082123712") then
-					task.wait(2.5)
-					local now = tick()
-
-					fn19(function()
-						local position = humanoidRootPart.Position
-						local flag11 = (fn22() - position).Magnitude > 50
-						local flag12
-
-						if flag11 then
-							flag12 = flag11
-						else
-							local n9 = now + 1.5
-							flag12 = tick() >= n9
-						end
-
-						return flag12
-					end)
-				end
-
-				if animationId:match("14719290328") then
-					local position = humanoidRootPart.Position
-
-					if (fn22() - position).Magnitude <= 50 then
-						getgenv().desync = { CFrame = CFrame.new(9e9, 9e9, 9e9) }
-					end
-
-					task.wait(0.5)
-
-					if arg3.IsPlaying then
-						local now = tick()
-
-						fn19(function()
-							local position2 = humanoidRootPart.Position
-							local flag11 = (fn22() - position2).Magnitude > 50 or fn20(humanoid2)
-
-							if not flag11 then
-								local n9 = now + 3.5
-								flag11 = tick() >= n9
-							end
-
-							return flag11 or not arg3.IsPlaying
-						end)
-					end
-				end
-
-				if animationId:match("15520132233") then
-					local now = tick()
-
-					fn19(function()
-						local position = humanoidRootPart.Position
-						local flag11 = (fn22() - position).Magnitude > 50 or fn20(humanoid2)
-
-						if not flag11 then
-							local n9 = now + 3.3
-							flag11 = tick() >= n9
-						end
-
-						return flag11 or not arg3.IsPlaying
-					end)
-
-					repeat
-						task.wait()
-					until now + 5.5 <= tick()
-
-					local now2 = tick()
-
-					fn19(function()
-						local position = humanoidRootPart.Position
-						local flag11 = (fn22() - position).Magnitude > 100 or fn20(humanoid2)
-
-						if not flag11 then
-							local n9 = now2 + 1
-							flag11 = tick() >= n9
-						end
-
-						return flag11 or not arg3.IsPlaying
-					end)
-				end
-
-				if animationId:match("15676072469") then
-					local v4, v5, v6 = fn21(Vector3.new(50, 10, 150))
-					local now = tick()
-
-					while true do
-						v4.CFrame = humanoidRootPart.CFrame * CFrame.new(0, 0, -75)
-
-						if v5() and not fn20(humanoid2) then
-							getgenv().desync = { CFrame = cframe }
-						else
-							getgenv().desync = nil
-						end
-
-						RunService.RenderStepped:Wait()
-						if not (tick() >= now + 2 or not arg3.IsPlaying) then
-							continue
-						end
-						break
-					end
-
-					getgenv().desync = nil
-					v6()
-				end
-
-				if animationId:match("16057411888") then
-					task.wait(4.25)
-					local now = tick()
-
-					fn19(function()
-						local position = humanoidRootPart.Position
-						local flag11 = (fn22() - position).Magnitude > 50
-						local flag12
-
-						if flag11 then
-							flag12 = flag11
-						else
-							local n9 = now + 2
-							flag12 = tick() >= n9
-						end
-
-						return flag12
-					end)
-				end
-
-				if animationId:match("18435535291") then
-					task.wait(4.25)
-					local now = tick()
-
-					fn19(function()
-						local position = humanoidRootPart.Position
-						local flag11 = (fn22() - position).Magnitude > 100
-						local flag12
-
-						if flag11 then
-							flag12 = flag11
-						else
-							local n9 = now + 1.25
-							flag12 = tick() >= n9
-						end
-
-						return flag12
-					end)
-				end
-
-				if animationId:match("17857788598") then
-					task.wait(0.65)
-
-					if arg3.IsPlaying then
-						local part = Instance.new("Part", workspace)
-						part.Anchored = true
-						part.Size = Vector3.new(35, 2048, 35)
-						part.CanCollide = false
-						part.Transparency = 1
-						local flag11 = false
-
-						local connection2 = part.Touched:Connect(function(hit)
-							if hit == humanoidRootPart2 or hit == getgenv().InvisPart30 then
-								flag11 = true
-							end
-						end)
-
-						local connection3 = part.TouchEnded:Connect(function(hit)
-							if hit == humanoidRootPart2 or hit == getgenv().InvisPart30 then
-								flag11 = false
-							end
-						end)
-
-						local now = tick()
-
-						while true do
-							part.CFrame = humanoidRootPart.CFrame
-
-							if flag11 and not fn18(humanoid, "15128849047") then
-								getgenv().desync = { CFrame = CFrame.new(9e9, 9e9, 9e9) }
-							else
-								getgenv().desync = nil
-							end
-
-							RunService.RenderStepped:Wait()
-							if not (tick() >= now + 0.85 or not arg3.IsPlaying) then
-								continue
-							end
-							break
-						end
-
-						getgenv().desync = nil
-						connection2:Disconnect()
-						connection3:Disconnect()
-
-						pcall(function()
-							part:Destroy()
-						end)
-					end
-				end
-
-				if animationId:match("129651400898906") then
-					task.wait(0.5)
-					local cFrame2 = humanoidRootPart.CFrame
-					local now = tick()
-
-					fn19(function()
-						local position = humanoidRootPart.Position
-						local flag11 = (fn22() - position).Magnitude > 75
-
-						if not flag11 then
-							local n9 = now + 1.25
-							flag11 = tick() >= n9
-						end
-
-						return flag11 or not arg3.IsPlaying
-					end)
-
-					task.wait(1)
-					local now2 = tick()
-
-					fn19(function()
-						local position = cFrame2.Position
-						local flag11 = (fn22() - position).Magnitude > 75
-						local flag12
-
-						if flag11 then
-							flag12 = flag11
-						else
-							local n9 = now2 + 1.75
-							flag12 = tick() >= n9
-						end
-
-						return flag12
-					end)
-				end
-
-				if animationId:match("18896229321") then
-					local now = tick()
-
-					fn19(function()
-						local position = humanoidRootPart.Position
-						local flag11 = (fn22() - position).Magnitude > 15 or isCountering(humanoid)
-						local flag12
-
-						if flag11 then
-							flag12 = flag11
-						else
-							local n9 = now + 3.5
-							flag12 = tick() >= n9
-						end
-
-						return flag12 or not arg3.IsPlaying
-					end)
-
-					task.wait(1)
-
-					if arg3.IsPlaying then
-						local position = humanoidRootPart.Position
-
-						if (fn22() - position).Magnitude <= 25 then
-							local now2 = tick()
-
-							fn19(function()
-								local position2 = humanoidRootPart.Position
-								local flag11 = (fn22() - position2).Magnitude > 25
-								local flag12
-
-								if flag11 then
-									flag12 = flag11
-								else
-									local n9 = now2 + 2
-									flag12 = tick() >= n9
-								end
-
-								return flag12 or not arg3.IsPlaying
-							end)
-						end
-					end
-				end
-
-				if animationId:match("18897119503") then
-					local now = tick()
-
-					fn19(function()
-						local position = humanoidRootPart.Position
-						local flag11 = (fn22() - position).Magnitude > 50
-						local flag12
-
-						if flag11 then
-							flag12 = flag11
-						else
-							local n9 = now + 1.5
-							flag12 = tick() >= n9
-						end
-
-						return flag12
-					end)
-				end
-
-				if animationId:match("106755459092436") or animationId:match("75502010126640") then
-					local now = tick()
-
-					fn19(function()
-						local position = humanoidRootPart.Position
-						local flag11 = (fn22() - position).Magnitude > 50
-						local flag12
-
-						if flag11 then
-							flag12 = flag11
-						else
-							local n9 = now + 2
-							flag12 = tick() >= n9
-						end
-
-						return flag12
-					end)
-				end
-
-				if animationId:match("16515850153") then
-					task.spawn(function()
-						local position = humanoidRootPart.Position
-
-						if (fn22() - position).Magnitude <= 15 then
-							getgenv().desync = { CFrame = CFrame.new(9e9, 9e9, 9e9) }
-						end
-
-						local dotted = workspace.Thrown:WaitForChild("Dotted", 1)
-
-						if dotted then
-							local dots = dotted:WaitForChild("Dots", 1)
-							if not dots then
-								getgenv().desync = nil
-								return
-							end
-							local now = tick()
-							local position2 = dots.Position
-
-							if (fn22() - position2).Magnitude > 20 then
-								getgenv().desync = nil
-							end
-
-							fn19(function()
-								local position3 = dots.Position
-								local flag11 = (fn22() - position3).Magnitude > 20 or fn20(humanoid2)
-								local flag12
-
-								if flag11 then
-									flag12 = flag11
-								else
-									local n9 = now + 4.25
-									flag12 = tick() >= n9
-								end
-
-								return flag12
-							end)
-						else
-							getgenv().desync = nil
-						end
-					end)
-				end
-
-				if animationId:match("16431491215") then
-					local now = tick()
-
-					while true do
-						task.wait()
-						local cFrame2 = humanoidRootPart.CFrame
-						if not ((fn22() - (cFrame2 * CFrame.new(0, 0, -25)).Position).Magnitude <= 25 or fn18(humanoid, "15128849047") or tick() >= now + 0.75) then
-							continue
-						end
-						break
-					end
-
-					if not fn18(humanoid, "15128849047") then
-						fn19(function()
-							local cFrame2 = humanoidRootPart.CFrame
-							local flag11 = (fn22() - (cFrame2 * CFrame.new(0, 0, -20)).Position).Magnitude > 25 or fn18(humanoid, "15128849047")
-
-							if not flag11 then
-								local n9 = now + 0.75
-								flag11 = tick() >= n9
-							end
-
-							return flag11
-						end)
-					end
-				end
-
-				if animationId:match("16597912086") then
-					local now = tick()
-
-					fn19(function()
-						local position = humanoidRootPart.Position
-						local flag11 = (fn22() - position).Magnitude > 15 or isCountering(humanoid)
-						local flag12
-
-						if flag11 then
-							flag12 = flag11
-						else
-							local n9 = now + 0.75
-							flag12 = tick() >= n9
-						end
-
-						return flag12
-					end)
-				end
-
-				if animationId:match("17275150809") then
-					local now = tick()
-
-					fn19(function()
-						local position = humanoidRootPart.Position
-						local flag11 = (fn22() - position).Magnitude > 50
-						local flag12
-
-						if flag11 then
-							flag12 = flag11
-						else
-							local n9 = now + 1
-							flag12 = tick() >= n9
-						end
-
-						return flag12
-					end)
-				end
-
-				if animationId:match("17278415853") and arg2:GetAttribute("Character") == "Esper" then
-					task.wait(11)
-					local now = tick()
-
-					fn19(function()
-						local position = humanoidRootPart.Position
-						local flag11 = (fn22() - position).Magnitude > 100
-						local flag12
-
-						if flag11 then
-							flag12 = flag11
-						else
-							local n9 = now + 6
-							flag12 = tick() >= n9
-						end
-
-						return flag12
-					end)
-				end
-
-				if animationId:match("16734584478") then
-					local now = tick()
-
-					fn19(function()
-						local position = humanoidRootPart.Position
-						local flag11 = (fn22() - position).Magnitude > 75
-						local flag12
-
-						if flag11 then
-							flag12 = flag11
-						else
-							local n9 = now + 5.75
-							flag12 = tick() >= n9
-						end
-
-						return flag12
-					end)
-				end
-
-				if animationId:match("13376869471") then
-					local part = Instance.new("Part", workspace)
-					part.Anchored = true
-					part.Size = Vector3.new(10, 7.5, 60)
-					part.CanCollide = false
-					part.Transparency = 1
-					local flag11 = false
-
-					local connection2 = part.Touched:Connect(function(hit)
-						if hit == humanoidRootPart2 or hit == getgenv().InvisPart30 then
-							flag11 = true
-						end
-					end)
-
-					local connection3 = part.TouchEnded:Connect(function(hit)
-						if hit == humanoidRootPart2 or hit == getgenv().InvisPart30 then
-							flag11 = false
-						end
-					end)
-
-					local now = tick()
-
-					while true do
-						part.CFrame = humanoidRootPart.CFrame * CFrame.new(0, 0, -part.Size.Z / 2)
-						RunService.RenderStepped:Wait()
-						if not (flag11 or tick() >= now + 3 or not arg3.IsPlaying) then
-							continue
-						end
-						break
-					end
-
-					if flag11 then
-						local now2 = tick()
-
-						fn19(function()
-							local flag12 = not flag11
-
-							if not flag12 then
-								local n9 = now2 + 1
-								flag12 = tick() >= n9
-							end
-
-							return flag12 or not arg3.IsPlaying
-						end)
-					end
-
-					connection2:Disconnect()
-					connection3:Disconnect()
-
-					pcall(function()
-						part:Destroy()
-					end)
-				end
-
-				if animationId:match("13294790250") then
-					task.wait(0.5)
-					local now = tick()
-
-					fn19(function()
-						local cFrame2 = humanoidRootPart.CFrame
-						local flag11 = (fn22() - (cFrame2 * CFrame.new(0, 0, -2.5)).Position).Magnitude > 10 or isCountering(humanoid)
-
-						if not flag11 then
-							local n9 = now + 0.75
-							flag11 = tick() >= n9
-						end
-
-						return flag11
-					end)
-				end
-
-				if animationId:match("13632347366") then
-					local now = tick()
-
-					fn19(function()
-						local position = humanoidRootPart.Position
-						local flag11 = (fn22() - position).Magnitude > 75 or fn20(humanoid2)
-						local flag12
-
-						if flag11 then
-							flag12 = flag11
-						else
-							local n9 = now + 1.75
-							flag12 = tick() >= n9
-						end
-
-						return flag12 or not arg3.IsPlaying
-					end)
-				end
-
-				if animationId:match("13723174078") then
-					task.wait(0.5)
-					local now = tick()
-
-					fn19(function()
-						local position = humanoidRootPart.Position
-						local flag11 = (fn22() - position).Magnitude > 50
-						local flag12
-
-						if flag11 then
-							flag12 = flag11
-						else
-							local n9 = now + 2
-							flag12 = tick() >= n9
-						end
-
-						return flag12 or not arg3.IsPlaying
-					end)
-				end
-
-				if animationId:match("13881335713") then
-					task.wait(0.75)
-
-					if arg3.IsPlaying then
-						local part = Instance.new("Part", workspace)
-						part.Anchored = true
-						part.Size = Vector3.new(35, 5, 60)
-						part.CanCollide = false
-						part.Transparency = 1
-						local flag11 = false
-
-						local connection2 = part.Touched:Connect(function(hit)
-							if hit == humanoidRootPart2 or hit == getgenv().InvisPart30 then
-								flag11 = true
-							end
-						end)
-
-						local connection3 = part.TouchEnded:Connect(function(hit)
-							if hit == humanoidRootPart2 or hit == getgenv().InvisPart30 then
-								flag11 = false
-							end
-						end)
-
-						local now = tick()
-
-						while true do
-							part.CFrame = humanoidRootPart.CFrame * CFrame.new(0, 0, -part.Size.Z / 2)
-							RunService.RenderStepped:Wait()
-							if not (flag11 or tick() >= now + 3 or not arg3.IsPlaying) then
-								continue
-							end
-							break
-						end
-
-						if flag11 then
-							local now2 = tick()
-
-							fn19(function()
-								local flag12 = not flag11
-
-								if not flag12 then
-									local n9 = now2 + 1
-									flag12 = tick() >= n9
-								end
-
-								return flag12 or not arg3.IsPlaying
-							end)
-						end
-
-						connection2:Disconnect()
-						connection3:Disconnect()
-
-						pcall(function()
-							part:Destroy()
-						end)
-					end
-				end
-
-				if animationId:match("14721837245") then
-					local now = tick()
-
-					fn19(function()
-						local position = humanoidRootPart.Position
-						local flag11 = (fn22() - position).Magnitude > 25 or fn18(humanoid, "15128849047")
-
-						if not flag11 then
-							local n9 = now + 1.5
-							flag11 = tick() >= n9
-						end
-
-						return flag11 or not arg3.IsPlaying
-					end)
-
-					if now + 1.5 <= tick() then
-						task.wait(1)
-						local now2 = tick()
-
-						fn19(function()
-							local position = humanoidRootPart.Position
-							local flag11 = (fn22() - position).Magnitude > 100
-							local flag12
-
-							if flag11 then
-								flag12 = flag11
-							else
-								local n9 = now2 + 1.5
-								flag12 = tick() >= n9
-							end
-
-							return flag12 or not arg3.IsPlaying
-						end)
-					end
-				end
-
-				if animationId:match("13083332742") then
-					task.wait(1)
-					local part = Instance.new("Part", workspace)
-					part.Anchored = true
-					part.Size = Vector3.new(12.5, 5, 1000)
-					part.CanCollide = false
-					part.Transparency = 1
-
-					task.delay(0.25, function()
-						part.CFrame = humanoidRootPart.CFrame * CFrame.new(0, 0, -part.Size.Z / 2)
-					end)
-
-					local flag11 = false
-
-					local connection2 = part.Touched:Connect(function(hit)
-						if hit == humanoidRootPart2 or hit == getgenv().InvisPart30 then
-							flag11 = true
-						end
-					end)
-
-					local connection3 = part.TouchEnded:Connect(function(hit)
-						if hit == humanoidRootPart2 or hit == getgenv().InvisPart30 then
-							flag11 = false
-						end
-					end)
-
-					local now = tick()
-
-					while true do
-						if flag11 and not fn20(humanoid2) then
-							getgenv().desync = { CFrame = CFrame.new(9e9, 9e9, 9e9) }
-						else
-							getgenv().desync = nil
-						end
-
-						RunService.RenderStepped:Wait()
-						if not (tick() >= now + 4 or not arg3.IsPlaying) then
-							continue
-						end
-						break
-					end
-
-					getgenv().desync = nil
-					connection2:Disconnect()
-					connection3:Disconnect()
-
-					pcall(function()
-						part:Destroy()
-					end)
-				end
-
-				if animationId:match("13146710762") then
-					task.wait(3.25)
-
-					if arg3.IsPlaying then
-						local tbl6 = {}
-						local tbl7 = {}
-						local n9 = CFrame.new(50, 0, -200) * CFrame.Angles(0, -0.26179938779914941, 0)
-						local n10 = CFrame.new(-50, 0, -200) * CFrame.Angles(0, 0.26179938779914941, 0)
-						local cframe2 = CFrame.new
-						tbl7[1] = n9
-						tbl7[2] = n10
-
-						do
-							local values = table.pack(cframe2(0, 0, -200))
-							table.move(values, 1, values.n, 3, tbl7)
-						end
-
-						local flag11 = false
-						local tbl8 = {}
-
-						for _, v4 in ipairs(tbl7) do
-							local part = Instance.new("Part", workspace)
-							part.Anchored = true
-							part.Size = Vector3.new(100, 75, 400)
-							part.CanCollide = false
-							part.Transparency = 1
-							part.CFrame = humanoidRootPart.CFrame * v4
-							table.insert(tbl6, part)
-
-							table.insert(tbl8, part.Touched:Connect(function(hit)
-								if hit == humanoidRootPart2 or hit == getgenv().InvisPart30 then
-									flag11 = true
-								end
-							end))
-
-							table.insert(tbl8, part.TouchEnded:Connect(function(hit)
-								if hit == humanoidRootPart2 or hit == getgenv().InvisPart30 then
-									flag11 = false
-								end
-							end))
-						end
-
-						local now = tick()
-
-						while true do
-							if flag11 and not fn20(humanoid2) then
-								getgenv().desync = { CFrame = CFrame.new(9e9, 9e9, 9e9) }
-							else
-								getgenv().desync = nil
-							end
-
-							RunService.RenderStepped:Wait()
-							if not (tick() >= now + 6 or not arg3.IsPlaying) then
-								continue
-							end
-							break
-						end
-
-						getgenv().desync = nil
-
-						for _, v4 in ipairs(tbl8) do
-							v4:Disconnect()
-						end
-
-						for _, v4 in ipairs(tbl6) do
-							pcall(function()
-								v4:Destroy()
-							end)
-						end
-					end
-				end
-
-				if animationId:match("11343318134") then
-					task.wait(7.5)
-					if not arg3.IsPlaying then
-						return
-					end
-					local tbl6 = {}
-					local tbl7 = {}
-					local n9 = CFrame.new(60, 0, -250) * CFrame.Angles(0, -0.26179938779914941, 0)
-					local n10 = CFrame.new(-60, 0, -250) * CFrame.Angles(0, 0.26179938779914941, 0)
-					local cframe2 = CFrame.new
-					tbl7[1] = n9
-					tbl7[2] = n10
-
-					do
-						local values = table.pack(cframe2(0, 0, -250))
-						table.move(values, 1, values.n, 3, tbl7)
-					end
-
-					local tbl8 = { false, false, false }
-					local tbl9 = {}
-
-					for i in ipairs(tbl7) do
-						local part = Instance.new("Part", workspace)
-						part.Anchored = true
-						part.Size = Vector3.new(125, 5, 500)
-						part.CanCollide = false
-						part.Transparency = 1
-						table.insert(tbl6, part)
-						local v4 = i
-
-						table.insert(tbl9, part.Touched:Connect(function(hit)
-							if hit == humanoidRootPart2 or hit == getgenv().InvisPart30 then
-								tbl8[v4] = true
-							end
-						end))
-
-						table.insert(tbl9, part.TouchEnded:Connect(function(hit)
-							if hit == humanoidRootPart2 or hit == getgenv().InvisPart30 then
-								tbl8[v4] = false
-							end
-						end))
-					end
-
-					local now = tick()
-
-					while true do
-						for i, v4 in ipairs(tbl6) do
-							v4.CFrame = humanoidRootPart.CFrame * tbl7[i]
-						end
-
-						if tbl8[1] or tbl8[2] or tbl8[3] then
-							getgenv().desync = { CFrame = CFrame.new(9e9, 9e9, 9e9) }
-						else
-							getgenv().desync = nil
-						end
-
-						RunService.RenderStepped:Wait()
-						if not (tick() >= now + 2.5 or not arg3.IsPlaying) then
-							continue
-						end
-						break
-					end
-
-					getgenv().desync = nil
-
-					for _, v4 in ipairs(tbl9) do
-						v4:Disconnect()
-					end
-
-					for _, v4 in ipairs(tbl6) do
-						pcall(function()
-							v4:Destroy()
-						end)
-					end
-				end
-			end)
-		end)
-	end
-
-	local function fn18(arg)
-		if arg == localPlayer then
-			return
-		end
-
-		if arg.Character then
-			task.spawn(fn17, arg, arg.Character)
-		end
-
-		tbl5[arg] = arg.CharacterAdded:Connect(function(character)
-			task.spawn(fn17, arg, character)
-		end)
-	end
-
-	for _, player in pairs(Players:GetPlayers()) do
-		task.spawn(fn18, player)
-	end
-
-	table.insert(fullConns, Players.PlayerAdded:Connect(function(player)
-		if player == localPlayer then
-			return
-		end
-
-		task.spawn(function()
-			local now = tick()
-
-			while true do
-				RunService.RenderStepped:Wait()
-				if not (player:GetAttribute("PreloadDone") or tick() >= now + 30) then
-					continue
-				end
-				break
-			end
-
-			if player and player.Parent then
-				if player.Character then
-					task.spawn(fn17, player, player.Character)
-				end
-
-				tbl5[player] = player.CharacterAdded:Connect(function(character)
-					task.spawn(fn17, player, character)
-				end)
-			end
-		end)
-	end))
-
-	table.insert(fullConns, Players.PlayerRemoving:Connect(function(player)
-		if tbl4[player] then
-			pcall(function()
-				tbl4[player]:Disconnect()
-			end)
-
-			tbl4[player] = nil
-		end
-
-		if tbl5[player] then
-			pcall(function()
-				tbl5[player]:Disconnect()
-			end)
-
-			tbl5[player] = nil
-		end
-	end))
-task.spawn(function()
-		while not stopped do
-			if getgenv().desync then
-				local now = tick()
-	
-				repeat
-					task.wait()
-				until tick() - now >= 20 or not getgenv().desync
-	
-				getgenv().desync = nil
-			end
-	
-			RunService.RenderStepped:Wait()
+if getgenv().SuiryuVoidStop then pcall(getgenv().SuiryuVoidStop) end
+
+local Players    = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local HttpService = game:GetService("HttpService")
+local VIM        = game:GetService("VirtualInputManager")
+local me         = Players.LocalPlayer
+
+getgenv().SelectedPlayers = getgenv().SelectedPlayers or {}
+local Selected = getgenv().SelectedPlayers
+
+local function root(c) return c and c:FindFirstChild("HumanoidRootPart") end
+local function hum(c)  return c and c:FindFirstChildOfClass("Humanoid") end
+
+local function zero(p)
+	p.AssemblyLinearVelocity, p.AssemblyAngularVelocity = Vector3.zero, Vector3.zero
+end
+
+local function setRep(p, v)
+	if sethiddenproperty and p and p.Parent then pcall(sethiddenproperty, p, "PhysicsRepRootPart", v) end
+end
+
+------------------------------------------------------------------
+-- antivoid (turns on when the function starts)
+------------------------------------------------------------------
+local voidOn = false
+local voidPart, voidFollowConn, voidHealthConn, voidCharConn, voidFallenConn
+local voidHealth = 100
+
+local function hookVoid(char)
+	if not char then return end
+	local h = char:FindFirstChildOfClass("Humanoid") or char:WaitForChild("Humanoid", 3)
+	local r = char:FindFirstChild("HumanoidRootPart") or char:WaitForChild("HumanoidRootPart", 3)
+	if not h or not r or not voidOn then return end
+
+	voidHealth = h.Health
+	if voidHealthConn then voidHealthConn:Disconnect() voidHealthConn = nil end
+	if voidFollowConn then voidFollowConn:Disconnect() voidFollowConn = nil end
+
+	voidFollowConn = RunService.RenderStepped:Connect(function()
+		local rr = char:FindFirstChild("HumanoidRootPart")
+		if rr and voidPart then
+			voidHealth = h.Health
+			voidPart.CFrame = CFrame.new(rr.Position.X, -10008, rr.Position.Z)
 		end
 	end)
-	-- the original's death-counter module also gave tbl4/tbl5 their locals: they are declared above
-	getgenv().FullAntiHitStop = function()
-		stopped = true
-		flag3 = false
-		getgenv().desync = nil
-		getgenv().FullAntiHitActive = nil
-		for _, c in ipairs(fullConns) do pcall(function() c:Disconnect() end) end
-		fullConns = {}
-		for _, c in pairs(tbl4) do pcall(function() c:Disconnect() end) end
-		for _, c in pairs(tbl5) do pcall(function() c:Disconnect() end) end
-		tbl4, tbl5 = {}, {}
-		pcall(function() model:Destroy() end)
+
+	voidHealthConn = h.HealthChanged:Connect(function(hp)
+		local rr = char:FindFirstChild("HumanoidRootPart")
+		if hp <= 0 and rr and rr.CFrame.Y <= 0 then h.Health = voidHealth end
+	end)
+end
+
+local function setAntivoid(on)
+	if on == voidOn then return end
+	voidOn = on
+
+	if on then
+		workspace.FallenPartsDestroyHeight = (0/0)
+		voidFallenConn = workspace:GetPropertyChangedSignal("FallenPartsDestroyHeight"):Connect(function()
+			local v = workspace.FallenPartsDestroyHeight
+			if voidOn and v == v then workspace.FallenPartsDestroyHeight = (0/0) end
+		end)
+
+		voidPart = Instance.new("Part")
+		voidPart.Name = HttpService:GenerateGUID()
+		voidPart.CFrame = CFrame.new(0, -10008, 0)
+		voidPart.Anchored = true
+		voidPart.Size = Vector3.new(2048, 10, 2048)
+		voidPart.Transparency = 0.5
+		voidPart.CanCollide = true
+		voidPart.Parent = workspace
+
+		task.spawn(hookVoid, me.Character)
+		voidCharConn = me.CharacterAdded:Connect(function(char)
+			task.wait(0.1)
+			hookVoid(char)
+		end)
+	else
+		if voidFallenConn then voidFallenConn:Disconnect() voidFallenConn = nil end
+		if voidCharConn then voidCharConn:Disconnect() voidCharConn = nil end
+		if voidHealthConn then voidHealthConn:Disconnect() voidHealthConn = nil end
+		if voidFollowConn then voidFollowConn:Disconnect() voidFollowConn = nil end
+		pcall(function() if voidPart then voidPart:Destroy() end end)
+		voidPart = nil
+		pcall(function() workspace.FallenPartsDestroyHeight = -500 end)
 	end
 end
+
+------------------------------------------------------------------
+-- Suiryu void = Twin Fangs void, once
+------------------------------------------------------------------
+local VOID_Y = -501
+local platform
+local function ensurePlatform()
+	if platform and platform.Parent then return end
+	local p = Instance.new("Part")
+	p.Name = "SuiryuVoidPlatform"
+	p.Size = Vector3.new(2048, 10, 2048)
+	p.Position = Vector3.new(0, VOID_Y - 5, 0)
+	p.Anchored = true
+	p.CanCollide = true
+	p.Material = Enum.Material.Glass
+	p.Color = Color3.fromRGB(210, 235, 255)
+	p.Transparency = 0.55
+	p.Parent = workspace
+	platform = p
+end
+
+local busy = false
+local setStatus = function() end
+
+local function suiryuVoid()
+	if busy then return end
+	busy = true
+	setAntivoid(true)                      -- auto antivoid when the function starts
+	ensurePlatform()
+
+	local ok, err = pcall(function()
+		local char = me.Character
+		local h, r = hum(char), root(char)
+		if not h or not r then setStatus("No character") return end
+
+		-- press 2 until the Twin Fangs animation plays (max 8s)
+		setStatus("Pressing 2 ...")
+		local track
+		local conn = h.AnimationPlayed:Connect(function(t)
+			if t.Animation.AnimationId:match("18896229321") then track = t end
+		end)
+		local giveUp = tick() + 8
+		while not track and tick() < giveUp do
+			VIM:SendKeyEvent(true, Enum.KeyCode.Two, false, game)
+			task.wait(0.05)
+			VIM:SendKeyEvent(false, Enum.KeyCode.Two, false, game)
+			task.wait(0.2)
+		end
+		conn:Disconnect()
+		if not track then setStatus("Twin Fangs did not start (ult ready? Purple?)") return end
+
+		local startedAt = tick()
+		local hardEnd = startedAt + 1.85
+
+		-- selected players, shuffled
+		local queue = {}
+		for _, p in ipairs(Players:GetPlayers()) do
+			if p ~= me and Selected[p.UserId] and root(p.Character) and hum(p.Character) then table.insert(queue, p) end
+		end
+		for i = #queue, 2, -1 do
+			local j = math.random(i)
+			queue[i], queue[j] = queue[j], queue[i]
+		end
+		setStatus("Twin Fangs: " .. #queue .. " target(s)")
+
+		local beat
+		local function unlink()
+			if beat then beat:Disconnect() beat = nil end
+			setRep(r, nil)
+			if r.Parent then
+				r.CFrame = CFrame.new(r.Position)
+				zero(r)
+				pcall(function() h.AutoRotate = true end)
+			end
+		end
+
+		for i, target in ipairs(queue) do
+			if tick() >= hardEnd or not track.IsPlaying or track.TimePosition >= 70 / 30 then break end
+			local tRoot, tHum = root(target.Character), hum(target.Character)
+			r = root(me.Character)
+			if tRoot and tHum and r then
+				local per = math.clamp((hardEnd - tick()) / (#queue - i + 1), 0.05, 0.4)
+
+				if beat then beat:Disconnect() end
+				pcall(function() h.AutoRotate = false end)
+				r.CFrame = CFrame.new(0, 0, 5)
+				zero(r)
+				setRep(r, r)
+				setRep(r, tRoot)
+				beat = RunService.Heartbeat:Connect(function()
+					if not r.Parent or not tRoot.Parent then return end
+					r.CFrame = CFrame.new(0, 0, 5)
+					zero(r)
+					setRep(r, tRoot)
+				end)
+
+				local hit = false
+				local c2 = tHum.AnimationPlayed:Connect(function(t)
+					local id = t.Animation.AnimationId
+					if id:match("18896222853") or id:match("137434257516014") then hit = true end
+				end)
+				local t0 = tick()
+				while not hit and tick() - t0 < per and tick() < hardEnd do RunService.Heartbeat:Wait() end
+				c2:Disconnect()
+			end
+		end
+		unlink()
+
+		-- let the 1.85s limit pass, then anchor at -501y for 3s
+		while tick() < hardEnd and track.IsPlaying do task.wait() end
+		setStatus("Anchored at " .. VOID_Y .. "y")
+		local pose = RunService.Heartbeat:Connect(function()
+			local rr = root(me.Character)
+			if rr then
+				zero(rr)
+				rr.CFrame = CFrame.new(0, VOID_Y, 0)
+			end
+		end)
+		task.wait(3)
+		pose:Disconnect()
+
+		local rr = root(me.Character)
+		if rr then
+			rr.CFrame = CFrame.new(0, VOID_Y, 0)
+			zero(rr)
+		end
+		setStatus("Done")
+	end)
+
+	if not ok then setStatus("Error: " .. tostring(err)) end
+	busy = false
+end
+
+------------------------------------------------------------------
+-- panel (black + gold)
+------------------------------------------------------------------
+local BG       = Color3.fromRGB(12, 12, 12)
+local GOLD     = Color3.fromRGB(235, 190, 30)
+local GOLD_DIM = Color3.fromRGB(190, 150, 35)
+local FILL     = Color3.fromRGB(62, 48, 8)
+local FILL_ON  = Color3.fromRGB(235, 190, 30)
+local ROW      = Color3.fromRGB(24, 20, 8)
+local FONT     = Enum.Font.Code
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "SuiryuVoidUI"
+gui.ResetOnSpawn = false
+gui.DisplayOrder = 999
+if not pcall(function() gui.Parent = game.CoreGui end) or not gui.Parent then
+	gui.Parent = me:WaitForChild("PlayerGui")
+end
+
+local function round(obj, r) Instance.new("UICorner", obj).CornerRadius = UDim.new(0, r) end
+
+local main = Instance.new("Frame")
+main.Size = UDim2.new(0, 190, 0, 250)
+main.Position = UDim2.new(0, 12, 0.5, -125)
+main.BackgroundColor3 = BG
+main.BorderSizePixel = 0
+main.Active = true
+main.Draggable = true
+main.Parent = gui
+round(main, 8)
+local stroke = Instance.new("UIStroke")
+stroke.Color, stroke.Thickness, stroke.Parent = GOLD, 2, main
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, -44, 0, 22)
+title.Position = UDim2.new(0, 8, 0, 6)
+title.BackgroundTransparency = 1
+title.Font, title.TextSize, title.TextColor3 = FONT, 16, GOLD
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Text = "Void kill"
+title.Parent = main
+
+local closeBtn = Instance.new("TextButton")
+closeBtn.Size = UDim2.new(0, 24, 0, 22)
+closeBtn.Position = UDim2.new(1, -30, 0, 6)
+closeBtn.BackgroundColor3 = FILL
+closeBtn.BorderSizePixel = 0
+closeBtn.Font, closeBtn.TextSize, closeBtn.TextColor3, closeBtn.Text = FONT, 14, GOLD, "x"
+closeBtn.Parent = main
+round(closeBtn, 6)
+
+local selectedLabel = Instance.new("TextLabel")
+selectedLabel.Size = UDim2.new(1, -16, 0, 14)
+selectedLabel.Position = UDim2.new(0, 8, 0, 30)
+selectedLabel.BackgroundTransparency = 1
+selectedLabel.Font, selectedLabel.TextSize, selectedLabel.TextColor3 = FONT, 12, GOLD_DIM
+selectedLabel.TextXAlignment = Enum.TextXAlignment.Left
+selectedLabel.Text = "Selected: 0"
+selectedLabel.Parent = main
+
+local list = Instance.new("ScrollingFrame")
+list.Size = UDim2.new(1, -16, 0, 130)
+list.Position = UDim2.new(0, 8, 0, 48)
+list.BackgroundColor3 = ROW
+list.BorderSizePixel = 0
+list.ScrollBarThickness = 3
+list.ScrollBarImageColor3 = GOLD_DIM
+list.CanvasSize = UDim2.new(0, 0, 0, 0)
+list.AutomaticCanvasSize = Enum.AutomaticSize.Y
+list.Parent = main
+round(list, 6)
+local layout = Instance.new("UIListLayout")
+layout.SortOrder = Enum.SortOrder.LayoutOrder
+layout.Padding = UDim.new(0, 2)
+layout.Parent = list
+
+local voidBtn = Instance.new("TextButton")
+voidBtn.Size = UDim2.new(1, -16, 0, 28)
+voidBtn.Position = UDim2.new(0, 8, 0, 184)
+voidBtn.BackgroundColor3 = FILL
+voidBtn.BorderSizePixel = 0
+voidBtn.Font, voidBtn.TextSize, voidBtn.TextColor3, voidBtn.Text = FONT, 13, GOLD, "Suiryu void"
+voidBtn.Parent = main
+round(voidBtn, 6)
+
+local status = Instance.new("TextLabel")
+status.Size = UDim2.new(1, -16, 0, 30)
+status.Position = UDim2.new(0, 8, 0, 216)
+status.BackgroundTransparency = 1
+status.Font, status.TextSize, status.TextColor3 = FONT, 10, GOLD_DIM
+status.TextWrapped = true
+status.TextXAlignment, status.TextYAlignment = Enum.TextXAlignment.Left, Enum.TextYAlignment.Top
+status.Text = "Select players, then press Suiryu void"
+status.Parent = main
+
+setStatus = function(t) status.Text = t end
+
+local rows = {}   -- [UserId] = button
+
+local function countSelected()
+	local n = 0
+	for uid in pairs(Selected) do
+		if Players:GetPlayerByUserId(uid) then n += 1 end
+	end
+	selectedLabel.Text = "Selected: " .. n
+end
+
+local function paintRow(btn, on)
+	btn.BackgroundColor3 = on and FILL_ON or ROW
+	btn.TextColor3 = on and BG or GOLD
+end
+
+local function addRow(p)
+	if p == me or rows[p.UserId] then return end
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.new(1, -4, 0, 26)
+	b.BackgroundColor3 = ROW
+	b.BorderSizePixel = 0
+	b.Font, b.TextSize, b.TextColor3 = FONT, 12, GOLD
+	b.Text = p.Name
+	b.LayoutOrder = #rows + 1
+	b.Parent = list
+	paintRow(b, Selected[p.UserId])
+
+	b.MouseButton1Click:Connect(function()
+		if Selected[p.UserId] then Selected[p.UserId] = nil else Selected[p.UserId] = true end
+		paintRow(b, Selected[p.UserId])
+		countSelected()
+	end)
+	rows[p.UserId] = b
+end
+
+for _, p in ipairs(Players:GetPlayers()) do addRow(p) end
+countSelected()
+
+local addConn = Players.PlayerAdded:Connect(addRow)
+local remConn = Players.PlayerRemoving:Connect(function(p)
+	local b = rows[p.UserId]
+	if b then b:Destroy() rows[p.UserId] = nil end
+	Selected[p.UserId] = nil
+	task.defer(countSelected)
+end)
+
+voidBtn.MouseButton1Click:Connect(function()
+	if busy then return end
+	task.spawn(suiryuVoid)
+end)
+
+task.spawn(function()
+	while gui.Parent do
+		voidBtn.BackgroundColor3 = busy and FILL_ON or FILL
+		voidBtn.TextColor3 = busy and BG or GOLD
+		task.wait(0.2)
+	end
+end)
+
+getgenv().SuiryuVoidStop = function()
+	if addConn then addConn:Disconnect() addConn = nil end
+	if remConn then remConn:Disconnect() remConn = nil end
+	setAntivoid(false)
+	pcall(function() if platform then platform:Destroy() end end)
+	gui:Destroy()
+end
+
+closeBtn.MouseButton1Click:Connect(function()
+	getgenv().SuiryuVoidStop()
+end)
