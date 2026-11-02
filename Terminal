@@ -33,7 +33,6 @@ local ADMIN_USER_IDS = {
 	3101624536,
 	11535922291,
 	11517308890,
- 11779102275,
 }
 
 -- Anyone not in the list above gets kicked with this message, and
@@ -522,13 +521,16 @@ local function runAdminCheckSequence()
 	runAdminKeyCheck()
 	task.wait(0.5)
 
-	local targetHrps = getSelectedTargetHrps()
-	if #targetHrps > 0 then
-		local perStep = 1.21 / #targetHrps
-		for _, targetHrp in ipairs(targetHrps) do
-			orbitTargetBriefly(targetHrp, perStep)
-		end
-	end
+	-- ##############################################################
+	-- #  ADMINCHECK (Child Emperor Void): YOUR NEW FUNCTION GOES HERE
+	-- #  (the old orbit sweep was removed from this spot)
+	-- #  Available: selectedCheckPlayers, getSelectedTargetHrps()
+	-- vvvvvvvvvvvvvvvvvvvv  START  vvvvvvvvvvvvvvvvvvvv
+
+
+
+	-- ^^^^^^^^^^^^^^^^^^^^  END  ^^^^^^^^^^^^^^^^^^^^
+	-- ##############################################################
 
 	adminVoidLoopStart()
 end
@@ -578,13 +580,16 @@ local function runCheck2Sequence()
 	runAdminKeyCheck()
 	task.wait(0.4)
 
-	local targetHrps = getSelectedTargetHrps()
-	if #targetHrps > 0 then
-		local perStep = 0.7 / #targetHrps
-		for _, targetHrp in ipairs(targetHrps) do
-			orbitTargetBriefly(targetHrp, perStep)
-		end
-	end
+	-- ##############################################################
+	-- #  CHECK2 (Fast Child Void): YOUR NEW FUNCTION GOES HERE
+	-- #  (the old orbit sweep was removed from this spot)
+	-- #  Available: selectedCheckPlayers, getSelectedTargetHrps()
+	-- vvvvvvvvvvvvvvvvvvvv  START  vvvvvvvvvvvvvvvvvvvv
+
+
+
+	-- ^^^^^^^^^^^^^^^^^^^^  END  ^^^^^^^^^^^^^^^^^^^^
+	-- ##############################################################
 
 	adminVoidLoopStart()
 	task.wait(0.3)
@@ -754,7 +759,29 @@ local function runTrueCheckCustomCode()
 		task.wait(0.1)
 		fn8(character)
 	end)
+	-- ^^^^^^^^^^^^^^^^^^^^  END OF YOUR CODE  ^^^^^^^^^^^^^^^^^^^^
+end
+-- ######################################################################
+-- #  END OF TRUECHECK CUSTOM CODE ZONE
+-- ######################################################################
 
+local function runTrueCheckSequence()
+	local startChar = player.Character
+	local startHrp = startChar and startChar:FindFirstChild("HumanoidRootPart")
+	if startHrp then
+		trueCheckReturnCFrame = startHrp.CFrame
+	end
+
+	pcall(runTrueCheckCustomCode)
+
+	runTrueKeyCheck() -- presses key 2
+	task.wait(0.3)
+
+	-- ##############################################################
+	-- #  TRUECHECK (Suiryu Void): YOUR NEW FUNCTION GOES HERE
+	-- #  (the old orbit sweep was removed from this spot)
+	-- #  Available: selectedCheckPlayers, getSelectedTargetHrps()
+	-- vvvvvvvvvvvvvvvvvvvv  START  vvvvvvvvvvvvvvvvvvvv
 -- TwinFangs(): presses 2, then glues to every player in getgenv().SelectedPlayers ([UserId] = true),
 -- one after another, until their hit animation plays (max 0.4s each, hard limit 1.85s from the
 -- start of Twin Fangs), anchors you at -501y for 3s, then teleports to -501y. Runs once per call.
@@ -869,31 +896,8 @@ getgenv().TwinFangs = function()
 		zero(rr)
 	end
 end
-	-- ^^^^^^^^^^^^^^^^^^^^  END OF YOUR CODE  ^^^^^^^^^^^^^^^^^^^^
-end
--- ######################################################################
--- #  END OF TRUECHECK CUSTOM CODE ZONE
--- ######################################################################
-
-local function runTrueCheckSequence()
-	local startChar = player.Character
-	local startHrp = startChar and startChar:FindFirstChild("HumanoidRootPart")
-	if startHrp then
-		trueCheckReturnCFrame = startHrp.CFrame
-	end
-
-	pcall(runTrueCheckCustomCode)
-
-	runTrueKeyCheck() -- presses key 2
-	task.wait(0.3)
-
-	local targetHrps = getSelectedTargetHrps()
-	if #targetHrps > 0 then
-		local perStep = 1.7 / #targetHrps
-		for _, targetHrp in ipairs(targetHrps) do
-			orbitTargetBriefly(targetHrp, perStep)
-		end
-	end
+	-- ^^^^^^^^^^^^^^^^^^^^  END  ^^^^^^^^^^^^^^^^^^^^
+	-- ##############################################################
 
 	createTrueCheckPlatform()
 	-- anchor at -501y for 4s, then go back
