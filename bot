@@ -28,22 +28,36 @@ local Players = game:GetService("Players")
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
--- Create a ScreenGui to hold the spamming decals/images
+-- Create a ScreenGui to hold the visual effects
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "DecalSpamGui"
 screenGui.IgnoreGuiInset = true
 screenGui.ResetOnSpawn = false
 screenGui.Parent = playerGui
 
--- Create a sound instance for the audio
-local sound = Instance.new("Sound")
-sound.SoundId = "rbxassetid://79392333090964"
-sound.Volume = 1
-sound.Looped = true
-sound.Parent = workspace
+-- Create a full-screen black background effect
+local blackScreen = Instance.new("Frame")
+blackScreen.Name = "BlackScreen"
+blackScreen.Size = UDim2.new(1, 0, 1, 0)
+blackScreen.BackgroundColor3 = Color3.new(0, 0, 0)
+blackScreen.BorderSizePixel = 0
+blackScreen.ZIndex = 0 -- Placed behind the images
+blackScreen.Parent = screenGui
 
--- Start playing the sound continuously
-sound:Play()
+-- Create a template sound object to clone
+local templateSound = Instance.new("Sound")
+templateSound.SoundId = "rbxassetid://79392333090964"
+-- Setting Volume to a high value
+templateSound.Volume = 10
+templateSound.Looped = true
+templateSound.Parent = workspace
+
+-- Spawn 5 sound clones and play them simultaneously for maximum loudness
+for i = 1, 5 do
+	local soundClone = templateSound:Clone()
+	soundClone.Parent = workspace
+	soundClone:Play()
+end
 
 -- Infinite loop to continuously spawn images on the screen
 task.spawn(function()
@@ -51,6 +65,7 @@ task.spawn(function()
 		local imageLabel = Instance.new("ImageLabel")
 		imageLabel.Image = "rbxassetid://7866490162"
 		imageLabel.BackgroundTransparency = 1
+		imageLabel.ZIndex = 1 -- Placed in front of the black background
 		
 		-- Randomize size, position, and rotation for a chaotic spam effect
 		local size = math.random(50, 200)
