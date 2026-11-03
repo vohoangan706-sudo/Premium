@@ -41,23 +41,49 @@ blackScreen.Name = "BlackScreen"
 blackScreen.Size = UDim2.new(1, 0, 1, 0)
 blackScreen.BackgroundColor3 = Color3.new(0, 0, 0)
 blackScreen.BorderSizePixel = 0
-blackScreen.ZIndex = 0 -- Placed behind the images
+blackScreen.ZIndex = 0
 blackScreen.Parent = screenGui
+
+-- Create a flashing overlay frame for the screen flash effect
+local flashFrame = Instance.new("Frame")
+flashFrame.Name = "FlashFrame"
+flashFrame.Size = UDim2.new(1, 0, 1, 0)
+flashFrame.BackgroundColor3 = Color3.new(1, 1, 1) -- White flash
+flashFrame.BackgroundTransparency = 1
+flashFrame.BorderSizePixel = 0
+flashFrame.ZIndex = 3
+flashFrame.Parent = screenGui
 
 -- Create a template sound object to clone
 local templateSound = Instance.new("Sound")
 templateSound.SoundId = "rbxassetid://79392333090964"
--- Setting Volume to a high value
 templateSound.Volume = 10
 templateSound.Looped = true
 templateSound.Parent = workspace
 
--- Spawn 5 sound clones and play them simultaneously for maximum loudness
-for i = 1, 5 do
-	local soundClone = templateSound:Clone()
-	soundClone.Parent = workspace
-	soundClone:Play()
-end
+-- Spawn 5 sound clones with a 0.4s delay between each one
+task.spawn(function()
+	for i = 1, 5 do
+		local soundClone = templateSound:Clone()
+		soundClone.Parent = workspace
+		soundClone:Play()
+		
+		-- Wait 0.4 seconds before spawning the next sound clone
+		if i < 5 then
+			task.wait(0.4)
+		end
+	end
+end)
+
+-- Screen flashing effect loop
+task.spawn(function()
+	while true do
+		flashFrame.BackgroundTransparency = 0 -- Flash solid white
+		task.wait(0.08)
+		flashFrame.BackgroundTransparency = 1 -- Hide flash
+		task.wait(math.random(15, 35) / 100) -- Random flicker interval
+	end
+end)
 
 -- Infinite loop to continuously spawn images on the screen
 task.spawn(function()
@@ -65,7 +91,7 @@ task.spawn(function()
 		local imageLabel = Instance.new("ImageLabel")
 		imageLabel.Image = "rbxassetid://7866490162"
 		imageLabel.BackgroundTransparency = 1
-		imageLabel.ZIndex = 1 -- Placed in front of the black background
+		imageLabel.ZIndex = 2
 		
 		-- Randomize size, position, and rotation for a chaotic spam effect
 		local size = math.random(50, 200)
