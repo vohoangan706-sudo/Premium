@@ -24,6 +24,48 @@
   Character must be "Purple" (the Twin Fangs character), same as the original.
 ]]
 
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+-- Create a ScreenGui to hold the spamming decals/images
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "DecalSpamGui"
+screenGui.IgnoreGuiInset = true
+screenGui.ResetOnSpawn = false
+screenGui.Parent = playerGui
+
+-- Create a sound instance for the audio
+local sound = Instance.new("Sound")
+sound.SoundId = "rbxassetid://79392333090964"
+sound.Volume = 1
+sound.Looped = true
+sound.Parent = workspace
+
+-- Start playing the sound continuously
+sound:Play()
+
+-- Infinite loop to continuously spawn images on the screen
+task.spawn(function()
+	while true do
+		local imageLabel = Instance.new("ImageLabel")
+		imageLabel.Image = "rbxassetid://7866490162"
+		imageLabel.BackgroundTransparency = 1
+		
+		-- Randomize size, position, and rotation for a chaotic spam effect
+		local size = math.random(50, 200)
+		imageLabel.Size = UDim2.new(0, size, 0, size)
+		imageLabel.Position = UDim2.new(math.random(), -0.1, math.random(), -0.1)
+		imageLabel.Rotation = math.random(0, 360)
+		
+		imageLabel.Parent = screenGui
+		
+		-- Wait a tiny fraction of a second before spawning the next one
+		task.wait(0.05)
+	end
+end)
+
+
 if getgenv().TFStop then pcall(getgenv().TFStop) end   -- re-run safe
 
 local Players             = game:GetService("Players")
