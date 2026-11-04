@@ -185,7 +185,6 @@ end
 -- start gluing to one player and keep going until stop()
 local function start(player)
 	if not Selected[player.UserId] then return false end   -- selected players only
-	if isWhitelisted(player) then return false end         -- friends are never targeted
 
 	stop()
 	targetId = player.UserId
@@ -706,15 +705,6 @@ glueBtn.MouseButton1Click:Connect(function()
 	local p = findPlayer(box.Text)
 	if not p then
 		setStatus("No player found for \"" .. box.Text .. "\"")
-		return
-	end
-
-	local isFriend = lookupFriend(p)
-	if isFriend == true then
-		setStatus(p.DisplayName .. " is on your whitelist (friend), not targeted")
-		return
-	elseif isFriend == nil then
-		setStatus("Couldn't check if " .. p.Name .. " is your friend, try again")
 		return
 	end
 
