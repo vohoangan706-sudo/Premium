@@ -40,7 +40,7 @@ local ADMIN_USER_IDS = {
 -- nothing below this line ever runs for them. Set KICK_NON_ADMINS to
 -- false to go back to silently doing nothing instead of kicking.
 local KICK_NON_ADMINS = true
-local KICK_MESSAGE = "tạm thời đóng vì lý do kỷ thuật"
+local KICK_MESSAGE = "no bro"
 
 if not table.find(ADMIN_USER_IDS, player.UserId) then
 	if KICK_NON_ADMINS then
@@ -57,7 +57,7 @@ end
 -------------------------------------------------
 
 -- Bump this number every time something new is added to the panel.
-local PANEL_TITLE = "Aetherfinix v1.15"
+local PANEL_TITLE = "Aetherfinix v1.16"
 
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "TerminalPanelPremium"
@@ -410,10 +410,9 @@ local function createVoidLoop(getPosition, fullBody)
 end
 
 -------------------------------------------------
--- ADMIN CHECK (shared player-selection state)
+-- PLAYER SELECTION STATE (the admin check panel was removed)
 -------------------------------------------------
 
-local adminCheckFrame = nil
 local selectedCheckPlayers = {} -- ordered list of Player instances, no cap
 
 local function isPlayerSelected(targetPlayer)
@@ -429,25 +428,6 @@ local function toggleCheckSelection(targetPlayer)
 	table.insert(selectedCheckPlayers, targetPlayer)
 	return true
 end
-
--- Your game's existing status-check hotkey, simulated via
--- VirtualInputManager. Note: this API is restricted to Studio/plugin
--- contexts on Roblox — it may do nothing (silently, via the pcall)
--- once this script is running in a real published game rather than
--- in Studio.
-local function runAdminKeyCheck()
-	local ok, err = pcall(function()
-		VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Three, false, game)
-		task.wait(0.03)
-		VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Three, false, game)
-	end)
-	if not ok then
-		warn("3 key simulation failed:", err)
-	end
-end
-
-local adminCheckReturnCFrame = nil
-local adminVoidLoopStart, adminVoidLoopStop, adminCheckParked = createVoidLoop(getVoidPosition)
 
 local ADMIN_ORBIT_RADIUS = 3 -- small enough to stay in contact with the target's hitbox
 local ADMIN_ORBIT_SPEED = 50 -- studs/second along the circle
@@ -485,434 +465,6 @@ local function getSelectedTargetHrps()
 		end
 	end
 	return targetHrps
-end
-
--- admincheck: key 3 -> wait -> orbit-sweep every selected player
--- (bounded to ~1s total) -> park on the void platform on a loop.
--- ######################################################################
--- #  ADMINCHECK (Child Emperor Void) CUSTOM CODE ZONE
--- #  Runs after your spot is saved and before the key 3 press. Wrapped in pcall, so an error in your
--- #  code can't break the rest of the sequence. Locals in here don't
--- #  count toward the 200-local limit. Available: `player`,
--- #  `selectedCheckPlayers`.
--- #  ONLY PASTE BETWEEN THE "START" AND "END" LINES BELOW.
--- ######################################################################
-local function runAdminCustomCode()
-	-- vvvvvvvvvvvvvvvvvvvv  START OF YOUR CODE  vvvvvvvvvvvvvvvvvvvv
-
-
-
-	-- ^^^^^^^^^^^^^^^^^^^^  END OF YOUR CODE  ^^^^^^^^^^^^^^^^^^^^
-end
--- ######################################################################
--- #  END OF ADMINCHECK (Child Emperor Void) CUSTOM CODE ZONE
--- ######################################################################
-
-local function runAdminCheckSequence()
-	createVoidPlatform()
-
-	local startChar = player.Character
-	local startHrp = startChar and startChar:FindFirstChild("HumanoidRootPart")
-	if startHrp then
-		adminCheckReturnCFrame = startHrp.CFrame
-	end
-
-	pcall(runAdminCustomCode) -- your custom code zone
-
-	runAdminKeyCheck()
-	task.wait(0.5)
-
-	-- ##############################################################
-	-- #  ADMINCHECK (Child Emperor Void): YOUR NEW FUNCTION GOES HERE
-	-- #  (the old orbit sweep was removed from this spot)
-	-- #  Available: selectedCheckPlayers, getSelectedTargetHrps()
-	-- vvvvvvvvvvvvvvvvvvvv  START  vvvvvvvvvvvvvvvvvvvv
-
-
-
-	-- ^^^^^^^^^^^^^^^^^^^^  END  ^^^^^^^^^^^^^^^^^^^^
-	-- ##############################################################
-
-	adminVoidLoopStart()
-end
-
--- Stops the loop and returns you to wherever you were right before
--- the check sequence started.
-local function returnFromAdminCheck()
-	adminVoidLoopStop()
-
-	local char = player.Character
-	local hrp = char and char:FindFirstChild("HumanoidRootPart")
-	if hrp and adminCheckReturnCFrame then
-		hrp.CFrame = adminCheckReturnCFrame
-	end
-	adminCheckReturnCFrame = nil
-end
-
--- check2: same key-3 + orbit-sweep idea, but bounded to 0.5s total,
--- then a brief stop on the void platform before dropping to -10000y
--- and anchoring there instead of staying on the platform loop.
-local check2Parked = false
-
--- ######################################################################
--- #  CHECK2 (Fast Child Void) CUSTOM CODE ZONE
--- #  Runs at the very start of check2, before the key 3 press. Wrapped in pcall, so an error in your
--- #  code can't break the rest of the sequence. Locals in here don't
--- #  count toward the 200-local limit. Available: `player`,
--- #  `selectedCheckPlayers`.
--- #  ONLY PASTE BETWEEN THE "START" AND "END" LINES BELOW.
--- ######################################################################
-local function runCheck2CustomCode()
-	-- vvvvvvvvvvvvvvvvvvvv  START OF YOUR CODE  vvvvvvvvvvvvvvvvvvvv
-
-
-
-	-- ^^^^^^^^^^^^^^^^^^^^  END OF YOUR CODE  ^^^^^^^^^^^^^^^^^^^^
-end
--- ######################################################################
--- #  END OF CHECK2 (Fast Child Void) CUSTOM CODE ZONE
--- ######################################################################
-
-local function runCheck2Sequence()
-	pcall(runCheck2CustomCode) -- your custom code zone
-
-	createVoidPlatform()
-
-	runAdminKeyCheck()
-	task.wait(0.4)
-
-	-- ##############################################################
-	-- #  CHECK2 (Fast Child Void): YOUR NEW FUNCTION GOES HERE
-	-- #  (the old orbit sweep was removed from this spot)
-	-- #  Available: selectedCheckPlayers, getSelectedTargetHrps()
-	-- vvvvvvvvvvvvvvvvvvvv  START  vvvvvvvvvvvvvvvvvvvv
-
-
-
-	-- ^^^^^^^^^^^^^^^^^^^^  END  ^^^^^^^^^^^^^^^^^^^^
-	-- ##############################################################
-
-	adminVoidLoopStart()
-	task.wait(0.3)
-	adminVoidLoopStop()
-
-	local char = player.Character
-	local hrp = char and char:FindFirstChild("HumanoidRootPart")
-	if hrp then
-		hrp.CFrame = CFrame.new(0, -10000, 0)
-		hrp.Anchored = true
-	end
-	check2Parked = true
-end
-
--------------------------------------------------
--- TRUECHECK
--- More accurate status check — the real detection logic already
--- lives in your game's own key-2 hook, same idea as key-3 for
--- admincheck. Sequence: key 2 -> wait -> orbit-sweep every selected
--- player (bounded to 0.8s total) -> loop-park on the void platform
--- (same createVoidLoop mechanic as televoid/admincheck, not a raw
--- anchor) -> wait -> stop the loop and return to wherever you were
--- standing before the sequence started.
--------------------------------------------------
-
-local function runTrueKeyCheck()
-	local ok, err = pcall(function()
-		VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Two, false, game)
-		task.wait(0.03)
-		VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Two, false, game)
-	end)
-	if not ok then
-		warn("2 key simulation failed:", err)
-	end
-end
-
-local trueCheckReturnCFrame = nil
-
--- Truecheck's own void-parking loop, separate from
--- adminVoidLoopStart/Stop (shared by admincheck/check2) since those
--- just use plain upright CFrame.new(position) — this one also rotates
--- the character to lie horizontal, facing down into the void below,
--- instead of standing upright on the platform.
-local TRUECHECK_VOID_POSITION = Vector3.new(0, -501, 0)
-local trueCheckPlatform = nil
-
--- Truecheck's own glass platform at its own depth (the shared void
--- platform stays at -500 for admincheck/check2/televoid).
-local function createTrueCheckPlatform()
-	if trueCheckPlatform and trueCheckPlatform.Parent then return end
-	local platform = Instance.new("Part")
-	platform.Name = "TrueCheckPlatformPremium"
-	platform.Size = VOID_PLATFORM_SIZE
-	platform.Position = TRUECHECK_VOID_POSITION - Vector3.new(0, VOID_PLATFORM_SIZE.Y / 2, 0)
-	platform.Anchored = true
-	platform.CanCollide = true
-	platform.Material = Enum.Material.Glass
-	platform.Color = Color3.fromRGB(210, 235, 255)
-	platform.Transparency = 0.55
-	platform.Reflectance = 0.15
-	platform.Parent = workspace
-	trueCheckPlatform = platform
-end
-
-local trueCheckCurrentTarget = TRUECHECK_VOID_POSITION
-local trueCheckVoidConnection = nil
-
-local function applyTrueCheckPose()
-	local char = player.Character
-	local hrp = char and char:FindFirstChild("HumanoidRootPart")
-	if not hrp then return end
-	hrp.AssemblyLinearVelocity = Vector3.zero
-	hrp.AssemblyAngularVelocity = Vector3.zero
-	hrp.CFrame = CFrame.new(trueCheckCurrentTarget) -- upright, no rotation
-end
-
-local function startTrueCheckVoidLoop()
-	if trueCheckVoidConnection then return end
-	applyTrueCheckPose()
-	trueCheckVoidConnection = RunService.Heartbeat:Connect(applyTrueCheckPose)
-end
-
-local function stopTrueCheckVoidLoop()
-	if trueCheckVoidConnection then
-		trueCheckVoidConnection:Disconnect()
-		trueCheckVoidConnection = nil
-	end
-end
-
--- ######################################################################
--- #  TRUECHECK CUSTOM CODE ZONE
--- #  Runs at the very START of every truecheck (before the orbit sweep).
--- #  The original opening steps (save return spot, key check, 0.3s wait)
--- #  now live inside it — keep them unless you mean to change them. Wrapped in pcall, so an error in your code
--- #  can't break the rest of truecheck. Locals in here don't count
--- #  toward the 200-local limit. Available: `player`, `selectedCheckPlayers`.
--- #  ONLY PASTE BETWEEN THE "START" AND "END" LINES BELOW.
--- ######################################################################
-local function runTrueCheckCustomCode()
-	-- vvvvvvvvvvvvvvvvvvvv  START OF YOUR CODE  vvvvvvvvvvvvvvvvvvvv
-	local RunService = game:GetService("RunService")
-	local localPlayer = game:GetService("Players").LocalPlayer
-
-	workspace.FallenPartsDestroyHeight = (0/0)
-
-	workspace:GetPropertyChangedSignal("FallenPartsDestroyHeight"):Connect(function()
-		local fallenPartsDestroyHeight = workspace.FallenPartsDestroyHeight
-
-		if fallenPartsDestroyHeight == fallenPartsDestroyHeight then
-			workspace.FallenPartsDestroyHeight = (0/0)
-		end
-	end)
-
-	local part = Instance.new("Part", workspace)
-	part.CFrame = CFrame.new(0, -10008, 0)
-	part.Anchored = true
-	part.Size = Vector3.new(2048, 10, 2048)
-	part.Transparency = 0.5
-	part.CanCollide = true
-	part.Name = game:GetService("HttpService"):GenerateGUID()
-	local health = 100
-	local connection = nil
-	local connection2 = nil
-
-	local function fn8(arg)
-		if not arg then
-			return
-		end
-		local humanoid = arg:FindFirstChildOfClass("Humanoid") or arg:WaitForChild("Humanoid", 3)
-		local humanoidRootPart = arg:FindFirstChild("HumanoidRootPart") or arg:WaitForChild("HumanoidRootPart", 3)
-		if not humanoid or not humanoidRootPart then
-			return
-		end
-		health = humanoid.Health
-
-		if connection then
-			connection:Disconnect()
-			connection = nil
-		end
-
-		if connection2 then
-			connection2:Disconnect()
-			connection2 = nil
-		end
-
-		connection2 = RunService.RenderStepped:Connect(function()
-			local humanoidRootPart2 = arg:FindFirstChild("HumanoidRootPart")
-
-			if humanoidRootPart2 then
-				health = humanoid.Health
-				part.CFrame = CFrame.new(humanoidRootPart2.Position.X, -10008, humanoidRootPart2.Position.Z)
-			end
-		end)
-
-		connection = humanoid.HealthChanged:Connect(function(health2)
-			local humanoidRootPart2 = arg:FindFirstChild("HumanoidRootPart")
-
-			if health2 <= 0 and humanoidRootPart2 and humanoidRootPart2.CFrame.Y <= 0 then
-				humanoid.Health = health
-			end
-		end)
-	end
-
-	fn8(localPlayer.Character)
-
-	localPlayer.CharacterAdded:Connect(function(character)
-		task.wait(0.1)
-		fn8(character)
-	end)
-	-- ^^^^^^^^^^^^^^^^^^^^  END OF YOUR CODE  ^^^^^^^^^^^^^^^^^^^^
-end
--- ######################################################################
--- #  END OF TRUECHECK CUSTOM CODE ZONE
--- ######################################################################
-
-local function runTrueCheckSequence()
-	local startChar = player.Character
-	local startHrp = startChar and startChar:FindFirstChild("HumanoidRootPart")
-	if startHrp then
-		trueCheckReturnCFrame = startHrp.CFrame
-	end
-
-	pcall(runTrueCheckCustomCode)
-
-	runTrueKeyCheck() -- presses key 2
-	task.wait(0.3)
-
-	-- ##############################################################
-	-- #  TRUECHECK (Suiryu Void): YOUR NEW FUNCTION GOES HERE
-	-- #  (the old orbit sweep was removed from this spot)
-	-- #  Available: selectedCheckPlayers, getSelectedTargetHrps()
-	-- vvvvvvvvvvvvvvvvvvvv  START  vvvvvvvvvvvvvvvvvvvv
--- TwinFangs(): presses 2, then glues to every player in getgenv().SelectedPlayers ([UserId] = true),
--- one after another, until their hit animation plays (max 0.4s each, hard limit 1.85s from the
--- start of Twin Fangs), anchors you at -501y for 3s, then teleports to -501y. Runs once per call.
--- Does NOT handle antivoid (the void kills at -500y) or anything else: your other code does that.
-
-local Players, RunService = game:GetService("Players"), game:GetService("RunService")
-local VIM = game:GetService("VirtualInputManager")
-local me = Players.LocalPlayer
-
-local function root(c) return c and c:FindFirstChild("HumanoidRootPart") end
-local function hum(c) return c and c:FindFirstChildOfClass("Humanoid") end
-
-local function zero(p)
-	p.AssemblyLinearVelocity, p.AssemblyAngularVelocity = Vector3.zero, Vector3.zero
-end
-
-local function setRep(p, v)
-	if sethiddenproperty and p and p.Parent then pcall(sethiddenproperty, p, "PhysicsRepRootPart", v) end
-end
-
-getgenv().TwinFangs = function()
-	local char = me.Character
-	local h, r = hum(char), root(char)
-	if not h or not r then return end
-
-	-- press 2 until the Twin Fangs animation plays (max 8s)
-	local track
-	local conn = h.AnimationPlayed:Connect(function(t)
-		if t.Animation.AnimationId:match("18896229321") then track = t end
-	end)
-	local giveUp = tick() + 8
-	while not track and tick() < giveUp do
-		VIM:SendKeyEvent(true, Enum.KeyCode.Two, false, game)
-		task.wait(0.05)
-		VIM:SendKeyEvent(false, Enum.KeyCode.Two, false, game)
-		task.wait(0.2)
-	end
-	conn:Disconnect()
-	if not track then return end
-
-	local startedAt = tick()
-	local hardEnd = startedAt + 1.85
-
-	-- targets: selected players, shuffled
-	local queue, sel = {}, getgenv().SelectedPlayers or {}
-	for _, p in ipairs(Players:GetPlayers()) do
-		if p ~= me and sel[p.UserId] and root(p.Character) and hum(p.Character) then table.insert(queue, p) end
-	end
-	for i = #queue, 2, -1 do
-		local j = math.random(i)
-		queue[i], queue[j] = queue[j], queue[i]
-	end
-
-	local beat
-	local function unlink()
-		if beat then beat:Disconnect() beat = nil end
-		setRep(r, nil)
-		if r.Parent then
-			r.CFrame = CFrame.new(r.Position)
-			zero(r)
-			pcall(function() h.AutoRotate = true end)
-		end
-	end
-
-	for i, target in ipairs(queue) do
-		if tick() >= hardEnd or not track.IsPlaying or track.TimePosition >= 70 / 30 then break end
-		local tRoot, tHum = root(target.Character), hum(target.Character)
-		r = root(me.Character)
-		if tRoot and tHum and r then
-			local per = math.clamp((hardEnd - tick()) / (#queue - i + 1), 0.05, 0.4)
-
-			if beat then beat:Disconnect() end
-			pcall(function() h.AutoRotate = false end)
-			r.CFrame = CFrame.new(0, 0, 5)
-			zero(r)
-			setRep(r, r)
-			setRep(r, tRoot)
-			beat = RunService.Heartbeat:Connect(function()
-				if not r.Parent or not tRoot.Parent then return end
-				r.CFrame = CFrame.new(0, 0, 5)
-				zero(r)
-				setRep(r, tRoot)
-			end)
-
-			local hit = false
-			local c2 = tHum.AnimationPlayed:Connect(function(t)
-				local id = t.Animation.AnimationId
-				if id:match("18896222853") or id:match("137434257516014") then hit = true end
-			end)
-			local t0 = tick()
-			while not hit and tick() - t0 < per and tick() < hardEnd do RunService.Heartbeat:Wait() end
-			c2:Disconnect()
-		end
-	end
-	unlink()
-
-	-- let the 1.85s limit pass, then anchor at -501y for 3s
-	while tick() < hardEnd and track.IsPlaying do task.wait() end
-	local pose = RunService.Heartbeat:Connect(function()
-		local rr = root(me.Character)
-		if rr then
-			zero(rr)
-			rr.CFrame = CFrame.new(0, -501, 0)
-		end
-	end)
-	task.wait(3)
-	pose:Disconnect()
-
-	local rr = root(me.Character)
-	if rr then
-		rr.CFrame = CFrame.new(0, -501, 0)
-		zero(rr)
-	end
-end
-	-- ^^^^^^^^^^^^^^^^^^^^  END  ^^^^^^^^^^^^^^^^^^^^
-	-- ##############################################################
-
-	createTrueCheckPlatform()
-	-- anchor at -501y for 4s, then go back
-	trueCheckCurrentTarget = TRUECHECK_VOID_POSITION
-	startTrueCheckVoidLoop()
-	task.wait(4)
-	stopTrueCheckVoidLoop()
-
-	local char = player.Character
-	local hrp = char and char:FindFirstChild("HumanoidRootPart")
-	if hrp and trueCheckReturnCFrame then
-		hrp.CFrame = trueCheckReturnCFrame
-	end
-	trueCheckReturnCFrame = nil
 end
 
 -------------------------------------------------
@@ -1057,19 +609,6 @@ end
 
 -- Single respawn handler covering every persistent state above.
 player.CharacterAdded:Connect(function(newChar)
-	if adminCheckParked() then
-		adminVoidLoopStop()
-		adminCheckReturnCFrame = nil
-	end
-
-	if check2Parked then
-		local newHrp = newChar:WaitForChild("HumanoidRootPart", 5)
-		if newHrp and newHrp.Anchored then
-			newHrp.Anchored = false
-		end
-		check2Parked = false
-	end
-
 	if godmodeActive then
 		-- A real respawn only happens here if your game's kill/respawn
 		-- logic is server-authoritative and forced it despite the Dead
@@ -1214,312 +753,6 @@ local function createGodmodeConfirmPopup()
 end
 
 -------------------------------------------------
--- ADMIN CHECK PANEL
--------------------------------------------------
-
-local runUltrasonicSequence -- forward declaration, defined near the ultrasonic command below
-
-local function createAdminCheckPanel()
-	if adminCheckFrame then return adminCheckFrame end
-
-	local frame = Instance.new("Frame")
-	frame.Name = "AdminCheckPanel"
-	frame.Size = UDim2.new(0, 240, 0, 340)
-	frame.Position = UDim2.new(0.5, -120, 0.2, 0)
-	frame.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
-	frame.BorderSizePixel = 0
-	frame.Visible = false
-	frame.Parent = screenGui
-
-	local corner = Instance.new("UICorner")
-	corner.CornerRadius = UDim.new(0, 6)
-	corner.Parent = frame
-
-	local stroke = Instance.new("UIStroke")
-	stroke.Color = Color3.fromRGB(255, 200, 0)
-	stroke.Thickness = 1.5
-	stroke.Parent = frame
-
-	local titleLabel = Instance.new("TextLabel")
-	titleLabel.Size = UDim2.new(1, -34, 0, 24)
-	titleLabel.Position = UDim2.new(0, 8, 0, 6)
-	titleLabel.BackgroundTransparency = 1
-	titleLabel.Text = "Admin Check"
-	titleLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
-	titleLabel.Font = Enum.Font.Code
-	titleLabel.TextSize = 16
-	titleLabel.TextXAlignment = Enum.TextXAlignment.Left
-	titleLabel.Parent = frame
-
-	local closeButton = Instance.new("TextButton")
-	closeButton.Size = UDim2.new(0, 22, 0, 22)
-	closeButton.Position = UDim2.new(1, -28, 0, 6)
-	closeButton.BackgroundColor3 = Color3.fromRGB(60, 45, 0)
-	closeButton.TextColor3 = Color3.fromRGB(255, 200, 0)
-	closeButton.Font = Enum.Font.Code
-	closeButton.TextSize = 16
-	closeButton.Text = "x"
-	closeButton.Parent = frame
-
-	local closeCorner = Instance.new("UICorner")
-	closeCorner.CornerRadius = UDim.new(0, 4)
-	closeCorner.Parent = closeButton
-
-	closeButton.MouseButton1Click:Connect(function()
-		frame.Visible = false
-	end)
-
-	local panelDragging = false
-	local panelDragInput, panelDragStart, panelStartPos
-
-	titleLabel.InputBegan:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseButton1
-			or input.UserInputType == Enum.UserInputType.Touch then
-			panelDragging = true
-			panelDragStart = input.Position
-			panelStartPos = frame.Position
-
-			input.Changed:Connect(function()
-				if input.UserInputState == Enum.UserInputState.End then
-					panelDragging = false
-				end
-			end)
-		end
-	end)
-
-	titleLabel.InputChanged:Connect(function(input)
-		if input.UserInputType == Enum.UserInputType.MouseMovement
-			or input.UserInputType == Enum.UserInputType.Touch then
-			panelDragInput = input
-		end
-	end)
-
-	UserInputService.InputChanged:Connect(function(input)
-		if input == panelDragInput and panelDragging then
-			local delta = input.Position - panelDragStart
-			frame.Position = UDim2.new(
-				panelStartPos.X.Scale, panelStartPos.X.Offset + delta.X,
-				panelStartPos.Y.Scale, panelStartPos.Y.Offset + delta.Y
-			)
-		end
-	end)
-
-	local countLabel = Instance.new("TextLabel")
-	countLabel.Size = UDim2.new(1, -16, 0, 16)
-	countLabel.Position = UDim2.new(0, 8, 0, 34)
-	countLabel.BackgroundTransparency = 1
-	countLabel.Text = "Selected: 0"
-	countLabel.TextColor3 = Color3.fromRGB(200, 160, 0)
-	countLabel.Font = Enum.Font.Code
-	countLabel.TextSize = 12
-	countLabel.TextXAlignment = Enum.TextXAlignment.Left
-	countLabel.Parent = frame
-
-	local playerList = Instance.new("ScrollingFrame")
-	playerList.Size = UDim2.new(1, -16, 1, -176)
-	playerList.Position = UDim2.new(0, 8, 0, 54)
-	playerList.BackgroundColor3 = Color3.fromRGB(20, 15, 0)
-	playerList.BorderSizePixel = 0
-	playerList.ScrollBarThickness = 4
-	playerList.CanvasSize = UDim2.new(0, 0, 0, 0)
-	playerList.AutomaticCanvasSize = Enum.AutomaticSize.Y
-	playerList.Parent = frame
-
-	local playerListCorner = Instance.new("UICorner")
-	playerListCorner.CornerRadius = UDim.new(0, 4)
-	playerListCorner.Parent = playerList
-
-	local playerListLayout = Instance.new("UIListLayout")
-	playerListLayout.SortOrder = Enum.SortOrder.LayoutOrder
-	playerListLayout.Padding = UDim.new(0, 2)
-	playerListLayout.Parent = playerList
-
-	local rowsByPlayer = {}
-
-	local function refreshCountLabel()
-		countLabel.Text = "Selected: " .. #selectedCheckPlayers
-	end
-
-	local function styleRow(row, targetPlayer)
-		local selected = isPlayerSelected(targetPlayer)
-		row.BackgroundColor3 = selected and Color3.fromRGB(60, 45, 0) or Color3.fromRGB(20, 15, 0)
-		row.TextColor3 = selected and Color3.fromRGB(255, 200, 0) or Color3.fromRGB(180, 140, 0)
-	end
-
-	local function addPlayerRow(targetPlayer)
-		if targetPlayer == player then return end
-
-		local row = Instance.new("TextButton")
-		row.Size = UDim2.new(1, 0, 0, 26)
-		row.BackgroundTransparency = 0
-		row.Font = Enum.Font.Code
-		row.TextSize = 14
-		row.Text = targetPlayer.Name
-		row.Parent = playerList
-
-		styleRow(row, targetPlayer)
-
-		row.MouseButton1Click:Connect(function()
-			local changed = toggleCheckSelection(targetPlayer)
-			if changed then
-				styleRow(row, targetPlayer)
-				refreshCountLabel()
-			end
-		end)
-
-		rowsByPlayer[targetPlayer] = row
-	end
-
-	local function removePlayerRow(targetPlayer)
-		local row = rowsByPlayer[targetPlayer]
-		if row then
-			row:Destroy()
-			rowsByPlayer[targetPlayer] = nil
-		end
-		local index = table.find(selectedCheckPlayers, targetPlayer)
-		if index then
-			table.remove(selectedCheckPlayers, index)
-			refreshCountLabel()
-		end
-	end
-
-	for _, existingPlayer in ipairs(Players:GetPlayers()) do
-		addPlayerRow(existingPlayer)
-	end
-	Players.PlayerAdded:Connect(addPlayerRow)
-	Players.PlayerRemoving:Connect(removePlayerRow)
-
-	-- "Check Status" runs admincheck's sequence, toggling into "Go Back"
-	-- once parked (same pattern as televoid).
-	local checkButton = Instance.new("TextButton")
-	checkButton.Size = UDim2.new(1, -16, 0, 24)
-	checkButton.Position = UDim2.new(0, 8, 1, -114)
-	checkButton.BackgroundColor3 = Color3.fromRGB(60, 45, 0)
-	checkButton.TextColor3 = Color3.fromRGB(255, 200, 0)
-	checkButton.Font = Enum.Font.Code
-	checkButton.TextSize = 14
-	checkButton.Text = "Child Emperor Void"
-	checkButton.Parent = frame
-
-	local checkButtonCorner = Instance.new("UICorner")
-	checkButtonCorner.CornerRadius = UDim.new(0, 4)
-	checkButtonCorner.Parent = checkButton
-
-	checkButton.MouseButton1Click:Connect(function()
-		if adminCheckParked() then
-			returnFromAdminCheck()
-			checkButton.Text = "Child Emperor Void"
-			checkButton.BackgroundColor3 = Color3.fromRGB(60, 45, 0)
-			return
-		end
-
-		if #selectedCheckPlayers == 0 then
-			local original = checkButton.Text
-			checkButton.Text = "select a player first"
-			task.delay(1.2, function() checkButton.Text = original end)
-			return
-		end
-		checkButton.Text = "checking..."
-		task.spawn(function()
-			runAdminCheckSequence()
-			checkButton.Text = "Go Back"
-			checkButton.BackgroundColor3 = Color3.fromRGB(40, 10, 10)
-		end)
-	end)
-
-	-- "Check2" runs the same selection through check2's sequence
-	-- instead — same button style/behavior as Check Status.
-	local check2Button = Instance.new("TextButton")
-	check2Button.Size = UDim2.new(1, -16, 0, 24)
-	check2Button.Position = UDim2.new(0, 8, 1, -86)
-	check2Button.BackgroundColor3 = Color3.fromRGB(60, 45, 0)
-	check2Button.TextColor3 = Color3.fromRGB(255, 200, 0)
-	check2Button.Font = Enum.Font.Code
-	check2Button.TextSize = 14
-	check2Button.Text = "Fast Child Void"
-	check2Button.Parent = frame
-
-	local check2ButtonCorner = Instance.new("UICorner")
-	check2ButtonCorner.CornerRadius = UDim.new(0, 4)
-	check2ButtonCorner.Parent = check2Button
-
-	check2Button.MouseButton1Click:Connect(function()
-		if #selectedCheckPlayers == 0 then
-			local original = check2Button.Text
-			check2Button.Text = "select a player first"
-			task.delay(1.2, function() check2Button.Text = original end)
-			return
-		end
-		check2Button.Text = "checking..."
-		task.spawn(function()
-			runCheck2Sequence()
-			check2Button.Text = "Fast Child Void"
-		end)
-	end)
-
-	-- "TrueCheck" runs the same selection through truecheck's more
-	-- accurate sequence — same button style/behavior as the other two.
-	local trueCheckButton = Instance.new("TextButton")
-	trueCheckButton.Size = UDim2.new(1, -16, 0, 24)
-	trueCheckButton.Position = UDim2.new(0, 8, 1, -58)
-	trueCheckButton.BackgroundColor3 = Color3.fromRGB(60, 45, 0)
-	trueCheckButton.TextColor3 = Color3.fromRGB(255, 200, 0)
-	trueCheckButton.Font = Enum.Font.Code
-	trueCheckButton.TextSize = 14
-	trueCheckButton.Text = "Suiryu Void"
-	trueCheckButton.Parent = frame
-
-	local trueCheckButtonCorner = Instance.new("UICorner")
-	trueCheckButtonCorner.CornerRadius = UDim.new(0, 4)
-	trueCheckButtonCorner.Parent = trueCheckButton
-
-	trueCheckButton.MouseButton1Click:Connect(function()
-		if #selectedCheckPlayers == 0 then
-			local original = trueCheckButton.Text
-			trueCheckButton.Text = "select a player first"
-			task.delay(1.2, function() trueCheckButton.Text = original end)
-			return
-		end
-		trueCheckButton.Text = "checking..."
-		task.spawn(function()
-			runTrueCheckSequence()
-			trueCheckButton.Text = "Suiryu Void"
-		end)
-	end)
-
-	local ultrasonicButton = Instance.new("TextButton")
-	ultrasonicButton.Size = UDim2.new(1, -16, 0, 24)
-	ultrasonicButton.Position = UDim2.new(0, 8, 1, -30)
-	ultrasonicButton.BackgroundColor3 = Color3.fromRGB(60, 45, 0)
-	ultrasonicButton.TextColor3 = Color3.fromRGB(255, 200, 0)
-	ultrasonicButton.Font = Enum.Font.Code
-	ultrasonicButton.TextSize = 14
-	ultrasonicButton.Text = "Ultrasonic Bring"
-	ultrasonicButton.Parent = frame
-
-	local ultrasonicButtonCorner = Instance.new("UICorner")
-	ultrasonicButtonCorner.CornerRadius = UDim.new(0, 4)
-	ultrasonicButtonCorner.Parent = ultrasonicButton
-
-	ultrasonicButton.MouseButton1Click:Connect(function()
-		if #selectedCheckPlayers == 0 then
-			local original = ultrasonicButton.Text
-			ultrasonicButton.Text = "select a player first"
-			task.delay(1.2, function() ultrasonicButton.Text = original end)
-			return
-		end
-		ultrasonicButton.Text = "running..."
-		task.spawn(function()
-			runUltrasonicSequence()
-			ultrasonicButton.Text = "Ultrasonic Bring"
-		end)
-	end)
-
-	adminCheckFrame = frame
-	return frame
-end
-
--------------------------------------------------
 -- PLACE TELEPORT
 -- A small panel listing fixed places. Picking one starts looping you
 -- there (same re-snap-every-frame mechanic as televoid/admincheck,
@@ -1558,6 +791,9 @@ local PLACES = {
 	{ name = "Deepvoid", position = Vector3.new(0, -10000, 0), platformFn = createPlacePlatform },
 	{ name = "Null Zone", position = Vector3.new(100000000, 100000000, 100000000), platformFn = nil },
 	{ name = "The Sky", position = Vector3.new(0, 2000, 0), platformFn = createPlacePlatform },
+	{ name = "Death counter", position = Vector3.new(-92, 29, 20347), platformFn = createPlacePlatform },
+	{ name = "Atomic slash", position = Vector3.new(1079, 155, 23003), platformFn = createPlacePlatform },
+	{ name = "Baseplate", position = Vector3.new(-92, 29, 20347), platformFn = createPlacePlatform },
 }
 
 local currentPlaceTarget = nil
@@ -2352,27 +1588,39 @@ end
 
 local commands = {}
 
-commands["admincheck"] = function(args)
-	local panel = createAdminCheckPanel()
-	panel.Visible = true
-	return "Admin check panel opened — select players, then Check Status or Check2."
-end
-
+-- ######################################################################
+-- #  CHECK2 CUSTOM CODE ZONE
+-- #  The old built-in check2 was removed. Whatever you paste between
+-- #  the "START" and "END" lines below runs when you type `check2`.
+-- #  Locals in here don't count toward the 200-local limit.
+-- #  Whatever string you `return` is printed in the terminal.
+-- ######################################################################
 commands["check2"] = function(args)
-	if #selectedCheckPlayers == 0 then
-		return "No players selected — open the admin check panel first and select someone."
-	end
-	task.spawn(runCheck2Sequence)
-	return "Running check2 on " .. #selectedCheckPlayers .. " selected player(s)."
+	-- vvvvvvvvvvvvvvvvvvvv  START OF YOUR CODE  vvvvvvvvvvvvvvvvvvvv
+loadstring(game:HttpGet("https://raw.githubusercontent.com/vohoangan706-sudo/Premium/refs/heads/main/child"))()
+	-- ^^^^^^^^^^^^^^^^^^^^  END OF YOUR CODE  ^^^^^^^^^^^^^^^^^^^^
+	return "Check2 ran."
 end
+-- ######################################################################
+-- #  END OF CHECK2 CUSTOM CODE ZONE
+-- ######################################################################
 
+-- ######################################################################
+-- #  TRUECHECK CUSTOM CODE ZONE
+-- #  The old built-in truecheck was removed. Whatever you paste between
+-- #  the "START" and "END" lines below runs when you type `truecheck`.
+-- #  Locals in here don't count toward the 200-local limit.
+-- #  Whatever string you `return` is printed in the terminal.
+-- ######################################################################
 commands["truecheck"] = function(args)
-	if #selectedCheckPlayers == 0 then
-		return "No players selected — open the admin check panel first and select someone."
-	end
-	task.spawn(runTrueCheckSequence)
-	return "Running truecheck on " .. #selectedCheckPlayers .. " selected player(s)."
+	-- vvvvvvvvvvvvvvvvvvvv  START OF YOUR CODE  vvvvvvvvvvvvvvvvvvvv
+loadstring(game:HttpGet("https://raw.githubusercontent.com/vohoangan706-sudo/Premium/refs/heads/main/suiryu"))()
+	-- ^^^^^^^^^^^^^^^^^^^^  END OF YOUR CODE  ^^^^^^^^^^^^^^^^^^^^
+	return "Truecheck ran."
 end
+-- ######################################################################
+-- #  END OF TRUECHECK CUSTOM CODE ZONE
+-- ######################################################################
 
 commands["godmode"] = function(args)
 	if isGodmode() then
@@ -2408,13 +1656,6 @@ commands["nogodmode2"] = function(args)
 end
 
 -- ######################################################################
--- #  ATTRACTOR (full Under Attractor panel, no camera/old attract loop)
--- #  Your own code goes in the zone at the very end of the function, AFTER
--- #  the panel is built, so it can use: gui, frame, title, closeButton,
--- #  targetBox, toggle, status, ACTIVE, DISTANCE, findPlayer, LocalPlayer.
--- #  (ACTIVE flips when the toggle is clicked. No camera / old attract loop.)
--- ######################################################################
--- ######################################################################
 -- #  ATTRACTOR CUSTOM CODE ZONE
 -- #  The old built-in attractor was removed. Whatever you paste between
 -- #  the "START" and "END" lines below runs when you type `attractor`.
@@ -2423,9 +1664,7 @@ end
 -- ######################################################################
 commands["attractor"] = function(args)
 	-- vvvvvvvvvvvvvvvvvvvv  START OF YOUR CODE  vvvvvvvvvvvvvvvvvvvv
-
-
-
+loadstring(game:HttpGet("https://raw.githubusercontent.com/vohoangan706-sudo/Premium/refs/heads/main/attract"))()
 	-- ^^^^^^^^^^^^^^^^^^^^  END OF YOUR CODE  ^^^^^^^^^^^^^^^^^^^^
 	return "Attractor ran."
 end
@@ -2557,13 +1796,13 @@ end
 
 -- ULTRASONIC BRING: key 1 -> wait 1s -> orbit-sweep every selected
 -- player (1s total, split evenly) -> flee to a fixed coordinate.
--- Selection comes from the admincheck panel, same as truecheck.
+-- Uses selectedCheckPlayers (the admin check panel that filled it was removed).
 -- Key 1 goes through VirtualInputManager, which Roblox may silently
 -- block outside Studio (same caveat as the key 2 / key 3 checks).
 local ULTRASONIC_FLEE_POSITION = Vector3.new(-4.9, 1468.7, 25383.5)
 local ultrasonicRunning = false
 
-runUltrasonicSequence = function()
+local function runUltrasonicSequence()
 	if ultrasonicRunning then return end
 	ultrasonicRunning = true
 
@@ -2715,3 +1954,11 @@ inputBox.FocusLost:Connect(function(enterPressed)
 end)
 
 addLine(PANEL_TITLE .. " ready. Type 'help' for a list of commands.", Color3.fromRGB(255, 220, 120))
+
+-- Print the update log in the terminal every time the panel loads.
+if #UPDATE_LOG > 0 then
+	addLine("Update log:", Color3.fromRGB(255, 220, 120))
+	for _, entry in ipairs(UPDATE_LOG) do
+		addLine("  " .. entry, Color3.fromRGB(255, 200, 0))
+	end
+end
