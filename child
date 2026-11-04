@@ -1,0 +1,437 @@
+--[[
+  VOID KILL panel  -  one button: "Child emperor void"   (the Duel farm function, once per press)
+  Tap players in the list to select them ("Selected: N", saved in getgenv().SelectedPlayers as [UserId] = true).
+  Press "Child emperor void" and it runs the duel void ONCE on the selected players:
+    antivoid turns on  >  wait for slot 3 to be off cooldown  >  press 3  >  wait 0.4s  >
+    glue (PhysicsRepRootPart) to the selected players for exactly 0.7s in total (split evenly)  >
+    anchored at -501y for 0.3s  >  anchored at -10000y for 3s  >  teleport to -500y.
+  Press it again for another run. The x closes the panel and turns antivoid off.
+]]
+
+if getgenv().ChildEmperorStop then pcall(getgenv().ChildEmperorStop) end
+
+local Players    = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local HttpService = game:GetService("HttpService")
+local VIM        = game:GetService("VirtualInputManager")
+local me         = Players.LocalPlayer
+
+getgenv().SelectedPlayers = getgenv().SelectedPlayers or {}
+local Selected = getgenv().SelectedPlayers
+
+local function root(c) return c and c:FindFirstChild("HumanoidRootPart") end
+local function hum(c)  return c and c:FindFirstChildOfClass("Humanoid") end
+
+local function zero(p)
+	p.AssemblyLinearVelocity, p.AssemblyAngularVelocity = Vector3.zero, Vector3.zero
+end
+
+local function setRep(p, v)
+	if sethiddenproperty and p and p.Parent then pcall(sethiddenproperty, p, "PhysicsRepRootPart", v) end
+end
+
+------------------------------------------------------------------
+-- antivoid (turns on when the function starts)
+------------------------------------------------------------------
+local voidOn = false
+local voidPart, voidFollowConn, voidHealthConn, voidCharConn, voidFallenConn
+local voidHealth = 100
+
+local function hookVoid(char)
+	if not char then return end
+	local h = char:FindFirstChildOfClass("Humanoid") or char:WaitForChild("Humanoid", 3)
+	local r = char:FindFirstChild("HumanoidRootPart") or char:WaitForChild("HumanoidRootPart", 3)
+	if not h or not r or not voidOn then return end
+
+	voidHealth = h.Health
+	if voidHealthConn then voidHealthConn:Disconnect() voidHealthConn = nil end
+	if voidFollowConn then voidFollowConn:Disconnect() voidFollowConn = nil end
+
+	voidFollowConn = RunService.RenderStepped:Connect(function()
+		local rr = char:FindFirstChild("HumanoidRootPart")
+		if rr and voidPart then
+			voidHealth = h.Health
+			voidPart.CFrame = CFrame.new(rr.Position.X, -10008, rr.Position.Z)
+		end
+	end)
+
+	voidHealthConn = h.HealthChanged:Connect(function(hp)
+		local rr = char:FindFirstChild("HumanoidRootPart")
+		if hp <= 0 and rr and rr.CFrame.Y <= 0 then h.Health = voidHealth end
+	end)
+end
+
+local function setAntivoid(on)
+	if on == voidOn then return end
+	voidOn = on
+
+	if on then
+		workspace.FallenPartsDestroyHeight = (0/0)
+		voidFallenConn = workspace:GetPropertyChangedSignal("FallenPartsDestroyHeight"):Connect(function()
+			local v = workspace.FallenPartsDestroyHeight
+			if voidOn and v == v then workspace.FallenPartsDestroyHeight = (0/0) end
+		end)
+
+		voidPart = Instance.new("Part")
+		voidPart.Name = HttpService:GenerateGUID()
+		voidPart.CFrame = CFrame.new(0, -10008, 0)
+		voidPart.Anchored = true
+		voidPart.Size = Vector3.new(2048, 10, 2048)
+		voidPart.Transparency = 0.5
+		voidPart.CanCollide = true
+		voidPart.Parent = workspace
+
+		task.spawn(hookVoid, me.Character)
+		voidCharConn = me.CharacterAdded:Connect(function(char)
+			task.wait(0.1)
+			hookVoid(char)
+		end)
+	else
+		if voidFallenConn then voidFallenConn:Disconnect() voidFallenConn = nil end
+		if voidCharConn then voidCharConn:Disconnect() voidCharConn = nil end
+		if voidHealthConn then voidHealthConn:Disconnect() voidHealthConn = nil end
+		if voidFollowConn then voidFollowConn:Disconnect() voidFollowConn = nil end
+		pcall(function() if voidPart then voidPart:Destroy() end end)
+		voidPart = nil
+		pcall(function() workspace.FallenPartsDestroyHeight = -500 end)
+	end
+end
+
+------------------------------------------------------------------
+-- Child emperor void = the duel farm routine, once
+------------------------------------------------------------------
+local DUEL_WAIT, DUEL_TIME = 0.4, 0.7
+local HOLD_POS, HOLD_TIME  = Vector3.new(0, -501, 0), 0.3
+local VOID_POS, VOID_TIME  = Vector3.new(0, -10000, 0), 3
+local RETURN_POS           = Vector3.new(0, -500, 0)
+
+local platforms = {}
+local function ensurePlatform(pos)
+	local key = math.floor(pos.Y + 0.5)
+	if platforms[key] and platforms[key].Parent then return end
+	local p = Instance.new("Part")
+	p.Name = "ChildEmperorPlatform"
+	p.Size = Vector3.new(2048, 10, 2048)
+	p.Position = Vector3.new(pos.X, pos.Y - 3 - p.Size.Y / 2, pos.Z)
+	p.Anchored = true
+	p.CanCollide = true
+	p.Material = Enum.Material.Glass
+	p.Color = Color3.fromRGB(210, 235, 255)
+	p.Transparency = 0.55
+	p.Parent = workspace
+	platforms[key] = p
+end
+
+-- slot press that works on PC (keyboard) and mobile (on-screen hotbar button)
+local function pressSlot3()
+	pcall(function()
+		VIM:SendKeyEvent(true, Enum.KeyCode.Three, false, game)
+		task.wait(0.05)
+		VIM:SendKeyEvent(false, Enum.KeyCode.Three, false, game)
+	end)
+	pcall(function()
+		local btn = me.PlayerGui.Hotbar.Backpack.Hotbar["3"]
+		for _, g in ipairs({btn, btn:FindFirstChild("Base")}) do
+			if g and g:IsA("GuiButton") then
+				for _, sig in ipairs({"MouseButton1Down", "MouseButton1Click", "Activated", "MouseButton1Up"}) do
+					if firesignal then pcall(firesignal, g[sig]) end
+				end
+			end
+		end
+	end)
+end
+
+-- a hotbar slot shows a "Cooldown" child under Base while it is cooling down
+local function slot3Ready()
+	local ok, ready = pcall(function()
+		return me.PlayerGui.Hotbar.Backpack.Hotbar["3"].Base:FindFirstChild("Cooldown") == nil
+	end)
+	if ok then return ready end
+	return true
+end
+
+local busy = false
+local setStatus = function() end
+
+local function childEmperorVoid()
+	if busy then return end
+	busy = true
+	setAntivoid(true)                      -- auto antivoid when the function starts
+
+	local ok, err = pcall(function()
+		local char = me.Character
+		local h, r = hum(char), root(char)
+		if not h or not r then setStatus("No character") return end
+
+		-- wait for slot 3 to be off cooldown (max 10s)
+		local give = tick() + 10
+		while not slot3Ready() and tick() < give do
+			setStatus("Waiting for slot 3 cooldown ...")
+			task.wait(0.05)
+		end
+		if not slot3Ready() then setStatus("Slot 3 is still on cooldown") return end
+
+		setStatus("Pressing 3 ...")
+		pressSlot3()
+		task.wait(DUEL_WAIT)
+
+		-- selected players, shuffled
+		local queue = {}
+		for _, p in ipairs(Players:GetPlayers()) do
+			if p ~= me and Selected[p.UserId] and root(p.Character) and hum(p.Character) then table.insert(queue, p) end
+		end
+		for i = #queue, 2, -1 do
+			local j = math.random(i)
+			queue[i], queue[j] = queue[j], queue[i]
+		end
+		setStatus("Duel: " .. #queue .. " target(s)")
+
+		local keepVel = true
+		task.spawn(function()
+			while keepVel do
+				local rr = root(me.Character)
+				if rr then zero(rr) end
+				RunService.Heartbeat:Wait()
+			end
+		end)
+
+		local beat
+		local function unlink()
+			if beat then beat:Disconnect() beat = nil end
+			setRep(r, nil)
+			if r.Parent then
+				r.CFrame = CFrame.new(r.Position)
+				zero(r)
+				pcall(function() h.AutoRotate = true end)
+			end
+		end
+
+		-- glue: EXACTLY DUEL_TIME seconds in total, the time left is always shared evenly
+		local hardEnd = tick() + DUEL_TIME
+		for i, target in ipairs(queue) do
+			if tick() >= hardEnd then break end
+			local tRoot = root(target.Character)
+			r = root(me.Character)
+			if tRoot and hum(target.Character) and r then
+				local slotEnd = tick() + (hardEnd - tick()) / (#queue - i + 1)
+
+				if beat then beat:Disconnect() end
+				pcall(function() h.AutoRotate = false end)
+				r.CFrame = CFrame.new(0, 0, 5)
+				zero(r)
+				setRep(r, r)
+				setRep(r, tRoot)
+				beat = RunService.Heartbeat:Connect(function()
+					if not r.Parent or not tRoot.Parent then return end
+					r.CFrame = CFrame.new(0, 0, 5)
+					zero(r)
+					setRep(r, tRoot)
+				end)
+				while tick() < slotEnd do RunService.Heartbeat:Wait() end
+			end
+		end
+		unlink()
+		keepVel = false
+
+		-- stage 1: anchored at -501y for HOLD_TIME, stage 2: at -10000y for VOID_TIME
+		local anchorPos = HOLD_POS
+		local function pose()
+			local rr = root(me.Character)
+			if not rr then return end
+			zero(rr)
+			rr.CFrame = CFrame.new(anchorPos)
+		end
+		setStatus("Anchored at " .. math.floor(HOLD_POS.Y + 0.5) .. "y")
+		ensurePlatform(HOLD_POS)
+		pose()
+		local poseConn = RunService.Heartbeat:Connect(pose)
+		task.wait(HOLD_TIME)
+
+		anchorPos = VOID_POS
+		setStatus("Anchored at " .. math.floor(VOID_POS.Y + 0.5) .. "y")
+		pose()
+		task.wait(VOID_TIME)
+		poseConn:Disconnect()
+
+		-- come back at -500y (glass floor there so you don't fall)
+		ensurePlatform(RETURN_POS)
+		local rr = root(me.Character)
+		if rr then
+			rr.CFrame = CFrame.new(RETURN_POS)
+			zero(rr)
+		end
+		setStatus("Done")
+	end)
+
+	if not ok then setStatus("Error: " .. tostring(err)) end
+	busy = false
+end
+
+------------------------------------------------------------------
+------------------------------------------------------------------
+-- panel (black + gold)
+------------------------------------------------------------------
+local BG       = Color3.fromRGB(12, 12, 12)
+local GOLD     = Color3.fromRGB(235, 190, 30)
+local GOLD_DIM = Color3.fromRGB(190, 150, 35)
+local FILL     = Color3.fromRGB(62, 48, 8)
+local FILL_ON  = Color3.fromRGB(235, 190, 30)
+local ROW      = Color3.fromRGB(24, 20, 8)
+local FONT     = Enum.Font.Code
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "ChildEmperorVoidUI"
+gui.ResetOnSpawn = false
+gui.DisplayOrder = 999
+if not pcall(function() gui.Parent = game.CoreGui end) or not gui.Parent then
+	gui.Parent = me:WaitForChild("PlayerGui")
+end
+
+local function round(obj, r) Instance.new("UICorner", obj).CornerRadius = UDim.new(0, r) end
+
+local main = Instance.new("Frame")
+main.Size = UDim2.new(0, 235, 0, 330)
+main.Position = UDim2.new(0, 259, 0.5, -165)   -- next to the Suiryu panel so both can be open
+main.BackgroundColor3 = BG
+main.BorderSizePixel = 0
+main.Active = true
+main.Draggable = true
+main.Parent = gui
+round(main, 8)
+local stroke = Instance.new("UIStroke")
+stroke.Color, stroke.Thickness, stroke.Parent = GOLD, 2, main
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, -52, 0, 24)
+title.Position = UDim2.new(0, 10, 0, 8)
+title.BackgroundTransparency = 1
+title.Font, title.TextSize, title.TextColor3 = FONT, 19, GOLD
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Text = "Void kill"
+title.Parent = main
+
+local closeBtn = Instance.new("TextButton")
+closeBtn.Size = UDim2.new(0, 28, 0, 24)
+closeBtn.Position = UDim2.new(1, -36, 0, 8)
+closeBtn.BackgroundColor3 = FILL
+closeBtn.BorderSizePixel = 0
+closeBtn.Font, closeBtn.TextSize, closeBtn.TextColor3, closeBtn.Text = FONT, 16, GOLD, "x"
+closeBtn.Parent = main
+round(closeBtn, 6)
+
+local selectedLabel = Instance.new("TextLabel")
+selectedLabel.Size = UDim2.new(1, -20, 0, 16)
+selectedLabel.Position = UDim2.new(0, 10, 0, 37)
+selectedLabel.BackgroundTransparency = 1
+selectedLabel.Font, selectedLabel.TextSize, selectedLabel.TextColor3 = FONT, 13, GOLD_DIM
+selectedLabel.TextXAlignment = Enum.TextXAlignment.Left
+selectedLabel.Text = "Selected: 0"
+selectedLabel.Parent = main
+
+local list = Instance.new("ScrollingFrame")
+list.Size = UDim2.new(1, -20, 0, 190)
+list.Position = UDim2.new(0, 10, 0, 58)
+list.BackgroundColor3 = ROW
+list.BorderSizePixel = 0
+list.ScrollBarThickness = 3
+list.ScrollBarImageColor3 = GOLD_DIM
+list.CanvasSize = UDim2.new(0, 0, 0, 0)
+list.AutomaticCanvasSize = Enum.AutomaticSize.Y
+list.Parent = main
+round(list, 6)
+local layout = Instance.new("UIListLayout")
+layout.SortOrder = Enum.SortOrder.LayoutOrder
+layout.Padding = UDim.new(0, 2)
+layout.Parent = list
+
+local voidBtn = Instance.new("TextButton")
+voidBtn.Size = UDim2.new(1, -20, 0, 32)
+voidBtn.Position = UDim2.new(0, 10, 0, 256)
+voidBtn.BackgroundColor3 = FILL
+voidBtn.BorderSizePixel = 0
+voidBtn.Font, voidBtn.TextSize, voidBtn.TextColor3, voidBtn.Text = FONT, 14, GOLD, "Child emperor void"
+voidBtn.Parent = main
+round(voidBtn, 6)
+
+local status = Instance.new("TextLabel")
+status.Size = UDim2.new(1, -20, 0, 34)
+status.Position = UDim2.new(0, 10, 0, 292)
+status.BackgroundTransparency = 1
+status.Font, status.TextSize, status.TextColor3 = FONT, 11, GOLD_DIM
+status.TextWrapped = true
+status.TextXAlignment, status.TextYAlignment = Enum.TextXAlignment.Left, Enum.TextYAlignment.Top
+status.Text = "Select players, then press Child emperor void"
+status.Parent = main
+
+setStatus = function(t) status.Text = t end
+
+local rows = {}   -- [UserId] = button
+
+local function countSelected()
+	local n = 0
+	for uid in pairs(Selected) do
+		if Players:GetPlayerByUserId(uid) then n += 1 end
+	end
+	selectedLabel.Text = "Selected: " .. n
+end
+
+local function paintRow(btn, on)
+	btn.BackgroundColor3 = on and FILL_ON or ROW
+	btn.TextColor3 = on and BG or GOLD
+end
+
+local function addRow(p)
+	if p == me or rows[p.UserId] then return end
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.new(1, -4, 0, 32)
+	b.BackgroundColor3 = ROW
+	b.BorderSizePixel = 0
+	b.Font, b.TextSize, b.TextColor3 = FONT, 14, GOLD
+	b.Text = p.Name
+	b.LayoutOrder = #rows + 1
+	b.Parent = list
+	paintRow(b, Selected[p.UserId])
+
+	b.MouseButton1Click:Connect(function()
+		if Selected[p.UserId] then Selected[p.UserId] = nil else Selected[p.UserId] = true end
+		paintRow(b, Selected[p.UserId])
+		countSelected()
+	end)
+	rows[p.UserId] = b
+end
+
+for _, p in ipairs(Players:GetPlayers()) do addRow(p) end
+countSelected()
+
+local addConn = Players.PlayerAdded:Connect(addRow)
+local remConn = Players.PlayerRemoving:Connect(function(p)
+	local b = rows[p.UserId]
+	if b then b:Destroy() rows[p.UserId] = nil end
+	Selected[p.UserId] = nil
+	task.defer(countSelected)
+end)
+
+voidBtn.MouseButton1Click:Connect(function()
+	if busy then return end
+	task.spawn(childEmperorVoid)
+end)
+
+task.spawn(function()
+	while gui.Parent do
+		voidBtn.BackgroundColor3 = busy and FILL_ON or FILL
+		voidBtn.TextColor3 = busy and BG or GOLD
+		task.wait(0.2)
+	end
+end)
+
+getgenv().ChildEmperorStop = function()
+	if addConn then addConn:Disconnect() addConn = nil end
+	if remConn then remConn:Disconnect() remConn = nil end
+	setAntivoid(false)
+	for _, pl in pairs(platforms) do pcall(function() pl:Destroy() end) end
+	gui:Destroy()
+end
+
+closeBtn.MouseButton1Click:Connect(function()
+	getgenv().ChildEmperorStop()
+end)
