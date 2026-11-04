@@ -1596,11 +1596,11 @@ local commands = {}
 -- #  Locals in here don't count toward the 200-local limit.
 -- #  Whatever string you `return` is printed in the terminal.
 -- ######################################################################
-commands["Childvoid"] = function(args)
+commands["childvoid"] = function(args)
 	-- vvvvvvvvvvvvvvvvvvvv  START OF YOUR CODE  vvvvvvvvvvvvvvvvvvvv
 loadstring(game:HttpGet("https://raw.githubusercontent.com/vohoangan706-sudo/Premium/refs/heads/main/child"))()
 	-- ^^^^^^^^^^^^^^^^^^^^  END OF YOUR CODE  ^^^^^^^^^^^^^^^^^^^^
-	return "Child emperor void ran."
+	return "Child void ran."
 end
 -- ######################################################################
 -- #  END OF CHECK2 CUSTOM CODE ZONE
