@@ -57,7 +57,7 @@ end
 -------------------------------------------------
 
 -- Bump this number every time something new is added to the panel.
-local PANEL_TITLE = "Aetherfinix v1.16"
+local PANEL_TITLE = "Aetherfinix v1.15"
 
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "TerminalPanelPremium"
@@ -1595,11 +1595,11 @@ local commands = {}
 -- #  Locals in here don't count toward the 200-local limit.
 -- #  Whatever string you `return` is printed in the terminal.
 -- ######################################################################
-commands["check2"] = function(args)
+commands["Childvoid"] = function(args)
 	-- vvvvvvvvvvvvvvvvvvvv  START OF YOUR CODE  vvvvvvvvvvvvvvvvvvvv
 loadstring(game:HttpGet("https://raw.githubusercontent.com/vohoangan706-sudo/Premium/refs/heads/main/child"))()
 	-- ^^^^^^^^^^^^^^^^^^^^  END OF YOUR CODE  ^^^^^^^^^^^^^^^^^^^^
-	return "Check2 ran."
+	return "Child emperor void ran."
 end
 -- ######################################################################
 -- #  END OF CHECK2 CUSTOM CODE ZONE
@@ -1612,11 +1612,11 @@ end
 -- #  Locals in here don't count toward the 200-local limit.
 -- #  Whatever string you `return` is printed in the terminal.
 -- ######################################################################
-commands["truecheck"] = function(args)
+commands["suiryuvoid"] = function(args)
 	-- vvvvvvvvvvvvvvvvvvvv  START OF YOUR CODE  vvvvvvvvvvvvvvvvvvvv
 loadstring(game:HttpGet("https://raw.githubusercontent.com/vohoangan706-sudo/Premium/refs/heads/main/suiryu"))()
 	-- ^^^^^^^^^^^^^^^^^^^^  END OF YOUR CODE  ^^^^^^^^^^^^^^^^^^^^
-	return "Truecheck ran."
+	return "suiryu void ran."
 end
 -- ######################################################################
 -- #  END OF TRUECHECK CUSTOM CODE ZONE
