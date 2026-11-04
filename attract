@@ -1,0 +1,771 @@
+-- Attractor panel (black + gold): type a name, press Glue, it stays glued until you press Stop.
+-- The camera follows the glued player (Spectate toggle); Stop puts it back on you.
+-- Survives respawns (yours or the target's), waits if the target leaves and
+-- resumes if they rejoin. Safe to re-run: it removes its previous copy first.
+
+if getgenv().GlueStop then pcall(getgenv().GlueStop) end
+
+local Players    = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local localPlayer = Players.LocalPlayer
+
+getgenv().SelectedPlayers = getgenv().SelectedPlayers or {}   -- [UserId] = true
+local Selected = getgenv().SelectedPlayers
+
+------------------------------------------------------------------
+-- whitelist: anyone you are friends with is never targeted
+-- (cached, so the glue loop never waits on a web call)
+------------------------------------------------------------------
+local friendCache = getgenv().WhitelistCache or {}   -- [UserId] = true / false
+getgenv().WhitelistCache = friendCache
+
+local function lookupFriend(p)          -- yields (web call): use outside hot loops
+	local ok, res = pcall(function() return localPlayer:IsFriendsWith(p.UserId) end)
+	if ok then friendCache[p.UserId] = res and true or false end
+	return friendCache[p.UserId]         -- nil if the lookup failed
+end
+
+local function isWhitelisted(p)         -- never yields
+	local v = friendCache[p.UserId]
+	if v == nil then
+		task.spawn(lookupFriend, p)      -- not known yet: look it up in the background
+		return true                      -- and stay safe until we know
+	end
+	return v
+end
+
+for _, p in ipairs(Players:GetPlayers()) do
+	if p ~= localPlayer then task.spawn(lookupFriend, p) end
+end
+local whitelistConn = Players.PlayerAdded:Connect(function(p)
+	task.spawn(lookupFriend, p)
+end)
+
+------------------------------------------------------------------
+-- glue core
+------------------------------------------------------------------
+local function zero(part)
+	part.AssemblyLinearVelocity  = Vector3.zero
+	part.AssemblyAngularVelocity = Vector3.zero
+	pcall(function() part.Velocity    = Vector3.zero end)
+	pcall(function() part.RotVelocity = Vector3.zero end)
+end
+
+local function setRep(part, value)
+	if sethiddenproperty and part and part.Parent then
+		pcall(function() sethiddenproperty(part, "PhysicsRepRootPart", value) end)
+	end
+end
+
+local active = false
+local targetId, targetName = nil, ""
+local attachedMy, attachedTheir
+local heartbeatConn, rotConn
+local lastState
+local onState = function() end
+local spectateOn = true   -- camera follows the glued player
+
+local function setState(s)
+	if s ~= lastState then
+		lastState = s
+		onState(s)
+	end
+end
+
+-- detach the physics link only (does not end the session)
+local function release()
+	if rotConn then rotConn:Disconnect() rotConn = nil end
+
+	setRep(attachedMy, nil)
+	setRep(attachedTheir, nil)
+
+	if attachedMy and attachedMy.Parent then
+		attachedMy.CFrame = CFrame.new(attachedMy.Position)
+		zero(attachedMy)
+		local hum = attachedMy.Parent:FindFirstChildOfClass("Humanoid")
+		if hum then pcall(function() hum.AutoRotate = true end) end
+	end
+
+	attachedMy, attachedTheir = nil, nil
+end
+
+-- link your root part to the target's root part
+local function attach(a, b, hum)
+	release()
+	attachedMy, attachedTheir = a, b
+
+	if hum then
+		rotConn = RunService.RenderStepped:Connect(function()
+			if hum.Parent then pcall(function() hum.AutoRotate = false end) end
+		end)
+	end
+
+	a.CFrame = CFrame.new(0, 0, 5)
+	zero(a)
+	setRep(a, a)
+	setRep(a, b)
+end
+
+-- spectate: we drive the camera CFrame ourselves (Scriptable), re-applied every frame after the
+-- game's camera script, because changing CameraSubject alone does not move the camera in this game.
+local SPECTATE_DIST = 12
+local specPlayer, specBeat, specRender
+
+local function specApply()
+	local cam = workspace.CurrentCamera
+	if not cam then return end
+
+	local tChar = specPlayer and specPlayer.Character
+	local tRoot = tChar and tChar:FindFirstChild("HumanoidRootPart")
+	if not tRoot or not tRoot.Parent then
+		-- target gone: give the camera back to your own character
+		local own = localPlayer.Character and localPlayer.Character:FindFirstChildOfClass("Humanoid")
+		if own then
+			if cam.CameraType ~= Enum.CameraType.Custom then cam.CameraType = Enum.CameraType.Custom end
+			if cam.CameraSubject ~= own then cam.CameraSubject = own end
+		end
+		return
+	end
+
+	local tHum = tChar:FindFirstChildOfClass("Humanoid")
+	if tHum and cam.CameraSubject ~= tHum then cam.CameraSubject = tHum end
+	if cam.CameraType ~= Enum.CameraType.Scriptable then cam.CameraType = Enum.CameraType.Scriptable end
+
+	local focus = tRoot.Position + Vector3.new(0, 2, 0)
+	local pos = focus - tRoot.CFrame.LookVector * SPECTATE_DIST + Vector3.new(0, 5, 0)
+	cam.CFrame = CFrame.lookAt(pos, focus)
+end
+
+local function unbindSpec()
+	pcall(function() RunService:UnbindFromRenderStep("AttractorSpectate") end)
+	if specBeat then specBeat:Disconnect() specBeat = nil end
+	if specRender then specRender:Disconnect() specRender = nil end
+end
+
+local function setSpectate(player)
+	if not player or player == localPlayer then return end
+	if specPlayer == player and specBeat then return end
+	specPlayer = player
+	unbindSpec()
+
+	local okBind = pcall(function()
+		RunService:BindToRenderStep("AttractorSpectate", 99999, specApply)   -- after everything else
+	end)
+	if not okBind then specRender = RunService.RenderStepped:Connect(specApply) end
+	specBeat = RunService.Heartbeat:Connect(specApply)
+	specApply()
+end
+
+-- put the camera back on your own character
+local function restoreCamera()
+	specPlayer = nil
+	unbindSpec()
+
+	local cam = workspace.CurrentCamera
+	local char = localPlayer.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if cam and hum then
+		pcall(function()
+			cam.CameraSubject = hum
+			cam.CameraType = Enum.CameraType.Custom
+		end)
+	end
+end
+
+-- end the session completely (this is what the Stop button does)
+local function stop()
+	active = false
+	targetId = nil
+	if heartbeatConn then heartbeatConn:Disconnect() heartbeatConn = nil end
+	release()
+	restoreCamera()
+	lastState = nil
+end
+
+-- start gluing to one player and keep going until stop()
+local function start(player)
+	if not Selected[player.UserId] then return false end   -- selected players only
+	if isWhitelisted(player) then return false end         -- friends are never targeted
+
+	stop()
+	targetId = player.UserId
+	targetName = player.DisplayName .. " (@" .. player.Name .. ")"
+	active = true
+
+	heartbeatConn = RunService.Heartbeat:Connect(function()
+		if not active then return end
+
+		local target = Players:GetPlayerByUserId(targetId)
+		if not target then
+			if attachedMy then release() end
+			setState("Waiting for " .. targetName .. " to rejoin...")
+			return
+		end
+
+		local myChar    = localPlayer.Character
+		local theirChar = target.Character
+		local a   = myChar    and myChar:FindFirstChild("HumanoidRootPart")
+		local b   = theirChar and theirChar:FindFirstChild("HumanoidRootPart")
+		local hum = myChar    and myChar:FindFirstChildOfClass("Humanoid")
+
+		if not a then
+			if attachedMy then release() end
+			setState("Waiting for your character...")
+			return
+		end
+
+		if not b then
+			if attachedMy then release() end
+			setState("Waiting for " .. targetName .. " to respawn...")
+			return
+		end
+
+		if a ~= attachedMy or b ~= attachedTheir then
+			attach(a, b, hum)          -- first attach, or either of you respawned
+		else
+			a.CFrame = CFrame.new(0, 0, 5)
+			zero(a)
+			setRep(a, b)
+		end
+
+		if spectateOn then
+			setSpectate(target)
+		end
+
+		setState("Glued to " .. targetName)
+	end)
+
+	return true
+end
+
+------------------------------------------------------------------
+-- name lookup: exact -> starts with -> contains (username or display name)
+------------------------------------------------------------------
+local function findPlayer(text)
+	text = text:match("^%s*(.-)%s*$"):lower()
+	if text == "" then return nil end
+
+	local function search(test)
+		for _, p in ipairs(Players:GetPlayers()) do
+			if p ~= localPlayer then
+				if test(p.Name:lower()) or test(p.DisplayName:lower()) then
+					return p
+				end
+			end
+		end
+	end
+
+	return search(function(n) return n == text end)
+		or search(function(n) return n:sub(1, #text) == text end)
+		or search(function(n) return n:find(text, 1, true) ~= nil end)
+end
+
+------------------------------------------------------------------
+-- invisible (taken from the original script)
+-- every Heartbeat it plays a frozen animation (71181015443030 at 13.45s,
+-- huge weight) and stops it again in RenderStepped; your own body shows at 50%
+------------------------------------------------------------------
+local invisOn   = false
+local invisBusy = false
+local invisTrack
+local invisBeat, invisCharConn
+local dimConns = {}
+
+local function dimPart(part)
+	if not part:IsA("BasePart") then return end
+	if part.Name == "HumanoidRootPart" then return end
+	if part.Transparency == 1 then return end
+	if part.Name:lower():find("hitbox") then return end
+
+	part.LocalTransparencyModifier = 0.5
+	table.insert(dimConns, part:GetPropertyChangedSignal("LocalTransparencyModifier"):Connect(function()
+		if invisOn and part.LocalTransparencyModifier ~= 0.5 then
+			part.LocalTransparencyModifier = 0.5
+		end
+	end))
+end
+
+local function dimCharacter(char)
+	for _, d in ipairs(char:GetDescendants()) do
+		dimPart(d)
+	end
+
+	table.insert(dimConns, char.DescendantAdded:Connect(function(d)
+		if invisOn then dimPart(d) end
+	end))
+end
+
+local function stopInvisTrack()
+	if invisTrack then
+		pcall(function()
+			if invisTrack.IsPlaying then invisTrack:Stop() end
+			invisTrack:Destroy()
+		end)
+		invisTrack = nil
+	end
+end
+
+local function invisStep()
+	if not invisOn or invisBusy then return end
+
+	local char = localPlayer.Character
+	local hum  = char and char:FindFirstChildOfClass("Humanoid")
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	local animator = hum and hum:FindFirstChildOfClass("Animator")
+	if not hum or not root or not animator then return end
+	if hum.Health <= 0 then return end
+
+	invisBusy = true
+
+	pcall(function()
+		local velocity = root.Velocity
+
+		local anim = Instance.new("Animation")
+		anim.AnimationId = "rbxassetid://71181015443030"
+		invisTrack = animator:LoadAnimation(anim)
+		invisTrack.Priority = Enum.AnimationPriority.Action4
+		invisTrack:Play()
+		invisTrack:AdjustSpeed(0)
+		invisTrack:AdjustWeight(2e9)
+		invisTrack.TimePosition = 13.45
+
+		RunService.RenderStepped:Wait()
+
+		stopInvisTrack()
+		root.Velocity = velocity
+	end)
+
+	invisBusy = false
+end
+
+local function setInvisible(on)
+	if on == invisOn then return end
+	invisOn = on
+
+	if on then
+		if localPlayer.Character then dimCharacter(localPlayer.Character) end
+
+		invisCharConn = localPlayer.CharacterAdded:Connect(function(char)
+			task.wait(0.1)
+			if invisOn then dimCharacter(char) end
+		end)
+
+		invisBeat = RunService.Heartbeat:Connect(invisStep)
+	else
+		if invisBeat then invisBeat:Disconnect() invisBeat = nil end
+		if invisCharConn then invisCharConn:Disconnect() invisCharConn = nil end
+
+		for _, c in ipairs(dimConns) do
+			pcall(function() c:Disconnect() end)
+		end
+		dimConns = {}
+
+		stopInvisTrack()
+
+		local char = localPlayer.Character
+		if char then
+			for _, d in ipairs(char:GetDescendants()) do
+				if d:IsA("BasePart") and d.Name ~= "HumanoidRootPart" then
+					d.LocalTransparencyModifier = 0
+				end
+			end
+		end
+	end
+end
+
+------------------------------------------------------------------
+-- antivoid (same as the farm panel): no void kill, and a platform under you far below the map
+------------------------------------------------------------------
+local voidOn = false
+local voidPart, voidFollowConn, voidHealthConn, voidCharConn, voidFallenConn
+local voidHealth = 100
+
+local function hookVoid(char)
+	if not char then return end
+	local hum  = char:FindFirstChildOfClass("Humanoid") or char:WaitForChild("Humanoid", 3)
+	local root = char:FindFirstChild("HumanoidRootPart") or char:WaitForChild("HumanoidRootPart", 3)
+	if not hum or not root or not voidOn then return end
+
+	voidHealth = hum.Health
+
+	if voidHealthConn then voidHealthConn:Disconnect() voidHealthConn = nil end
+	if voidFollowConn then voidFollowConn:Disconnect() voidFollowConn = nil end
+
+	voidFollowConn = RunService.RenderStepped:Connect(function()
+		local r = char:FindFirstChild("HumanoidRootPart")
+		if r and voidPart then
+			voidHealth = hum.Health
+			voidPart.CFrame = CFrame.new(r.Position.X, -10008, r.Position.Z)
+		end
+	end)
+
+	voidHealthConn = hum.HealthChanged:Connect(function(h)
+		local r = char:FindFirstChild("HumanoidRootPart")
+		if h <= 0 and r and r.CFrame.Y <= 0 then
+			hum.Health = voidHealth
+		end
+	end)
+end
+
+local function setAntivoid(on)
+	if on == voidOn then return end
+	voidOn = on
+
+	if on then
+		workspace.FallenPartsDestroyHeight = (0/0)
+		voidFallenConn = workspace:GetPropertyChangedSignal("FallenPartsDestroyHeight"):Connect(function()
+			local h = workspace.FallenPartsDestroyHeight
+			if voidOn and h == h then
+				workspace.FallenPartsDestroyHeight = (0/0)
+			end
+		end)
+
+		voidPart = Instance.new("Part")
+		voidPart.Name = game:GetService("HttpService"):GenerateGUID()
+		voidPart.CFrame = CFrame.new(0, -10008, 0)
+		voidPart.Anchored = true
+		voidPart.Size = Vector3.new(2048, 10, 2048)
+		voidPart.Transparency = 0.5
+		voidPart.CanCollide = true
+		voidPart.Parent = workspace
+
+		task.spawn(hookVoid, localPlayer.Character)
+		voidCharConn = localPlayer.CharacterAdded:Connect(function(char)
+			task.wait(0.1)
+			hookVoid(char)
+		end)
+	else
+		if voidFallenConn then voidFallenConn:Disconnect() voidFallenConn = nil end
+		if voidCharConn then voidCharConn:Disconnect() voidCharConn = nil end
+		if voidHealthConn then voidHealthConn:Disconnect() voidHealthConn = nil end
+		if voidFollowConn then voidFollowConn:Disconnect() voidFollowConn = nil end
+		pcall(function() if voidPart then voidPart:Destroy() end end)
+		voidPart = nil
+		pcall(function() workspace.FallenPartsDestroyHeight = -500 end)
+	end
+end
+
+------------------------------------------------------------------
+-- voidkill: when YOU use an ability (a hotbar slot 1-4 starts its cooldown) while glued:
+-- glue off at once > wait VK_WAIT s > anchored at -505y for VK_TIME s > glue again on the same player.
+-- Needs antivoid (the void kills at -500y), so turning Voidkill on also turns Antivoid on.
+------------------------------------------------------------------
+local VK_Y     = -505
+local VK_WAIT  = 0.4   -- seconds to wait (glue already off) before anchoring
+local VK_TIME  = 2
+local voidkillOn = false
+local vkBusy = false
+local vkPlatform
+local vkPrev = {}
+
+local function slotOnCooldown(slot)
+	local ok, cd = pcall(function()
+		return localPlayer.PlayerGui.Hotbar.Backpack.Hotbar[tostring(slot)].Base:FindFirstChild("Cooldown") ~= nil
+	end)
+	return ok and cd or false
+end
+
+local function ensureVkPlatform()
+	if vkPlatform and vkPlatform.Parent then return end
+	local pl = Instance.new("Part")
+	pl.Name = "GlueVoidkillPlatform"
+	pl.Size = Vector3.new(2048, 10, 2048)
+	pl.Position = Vector3.new(0, VK_Y - 3 - pl.Size.Y / 2, 0)
+	pl.Anchored = true
+	pl.CanCollide = true
+	pl.Material = Enum.Material.Glass
+	pl.Color = Color3.fromRGB(210, 235, 255)
+	pl.Transparency = 0.55
+	pl.Parent = workspace
+	vkPlatform = pl
+end
+
+local function voidkillCycle()
+	if vkBusy or not active or not targetId then return end
+	vkBusy = true
+
+	local target = Players:GetPlayerByUserId(targetId)
+
+	stop()                       -- glue off immediately
+	ensureVkPlatform()
+
+	local function pose()
+		local r = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
+		if not r then return end
+		r.AssemblyLinearVelocity  = Vector3.zero
+		r.AssemblyAngularVelocity = Vector3.zero
+		r.CFrame = CFrame.new(0, VK_Y, 0)
+	end
+	setState("Voidkill: waiting " .. VK_WAIT .. "s")
+	local tw = tick()
+	while voidkillOn and tick() - tw < VK_WAIT do
+		task.wait(0.02)
+	end
+
+	setState("Voidkill: anchored at " .. VK_Y .. "y")
+	pose()
+	local conn = RunService.Heartbeat:Connect(pose)
+
+	local t0 = tick()
+	while voidkillOn and tick() - t0 < VK_TIME do
+		task.wait(0.05)
+	end
+	conn:Disconnect()
+
+	if voidkillOn and target and target.Parent then
+		Selected[target.UserId] = true
+		start(target)            -- glue again
+	end
+	vkBusy = false
+end
+
+local vkLoopRunning = false
+local function setVoidkill(on)
+	if on == voidkillOn then return end
+	voidkillOn = on
+
+	if on then
+		setAntivoid(true)
+		for i = 1, 4 do vkPrev[i] = slotOnCooldown(i) end
+		if vkLoopRunning then return end
+		vkLoopRunning = true
+		task.spawn(function()
+			while voidkillOn do
+				for i = 1, 4 do
+					local now = slotOnCooldown(i)
+					if now and not vkPrev[i] and active and not vkBusy then
+						task.spawn(voidkillCycle)
+					end
+					vkPrev[i] = now
+				end
+				task.wait(0.03)
+			end
+			vkLoopRunning = false
+		end)
+	else
+		pcall(function() if vkPlatform then vkPlatform:Destroy() end end)
+		vkPlatform = nil
+	end
+end
+
+------------------------------------------------------------------
+-- panel (black + gold)
+------------------------------------------------------------------
+local BG       = Color3.fromRGB(12, 12, 12)
+local GOLD     = Color3.fromRGB(235, 190, 30)
+local GOLD_DIM = Color3.fromRGB(190, 150, 35)
+local FILL     = Color3.fromRGB(62, 48, 8)      -- button fill
+local FILL_ON  = Color3.fromRGB(235, 190, 30)   -- toggled-on fill
+local ROW      = Color3.fromRGB(24, 20, 8)
+local FONT     = Enum.Font.Code
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "AttractorPanelUI"
+gui.ResetOnSpawn = false
+gui.DisplayOrder = 999
+local ok = pcall(function() gui.Parent = game.CoreGui end)
+if not ok or not gui.Parent then
+	gui.Parent = localPlayer:WaitForChild("PlayerGui")
+end
+
+local function round(obj, r)
+	Instance.new("UICorner", obj).CornerRadius = UDim.new(0, r)
+end
+
+local main = Instance.new("Frame")
+main.Size = UDim2.new(0, 270, 0, 256)
+main.Position = UDim2.new(0.5, -135, 0.5, -128)
+main.BackgroundColor3 = BG
+main.BorderSizePixel = 0
+main.Active = true
+main.Draggable = true
+main.Parent = gui
+round(main, 8)
+
+local stroke = Instance.new("UIStroke")
+stroke.Color = GOLD
+stroke.Thickness = 2
+stroke.Parent = main
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, -60, 0, 26)
+title.Position = UDim2.new(0, 12, 0, 8)
+title.BackgroundTransparency = 1
+title.Font = FONT
+title.TextSize = 22
+title.TextColor3 = GOLD
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Text = "Attractor panel"
+title.Parent = main
+
+local closeBtn = Instance.new("TextButton")
+closeBtn.Size = UDim2.new(0, 30, 0, 26)
+closeBtn.Position = UDim2.new(1, -40, 0, 8)
+closeBtn.BackgroundColor3 = FILL
+closeBtn.BorderSizePixel = 0
+closeBtn.Font = FONT
+closeBtn.TextSize = 18
+closeBtn.TextColor3 = GOLD
+closeBtn.Text = "x"
+closeBtn.Parent = main
+round(closeBtn, 6)
+
+local selectedLabel = Instance.new("TextLabel")
+selectedLabel.Size = UDim2.new(1, -24, 0, 16)
+selectedLabel.Position = UDim2.new(0, 12, 0, 36)
+selectedLabel.BackgroundTransparency = 1
+selectedLabel.Font = FONT
+selectedLabel.TextSize = 14
+selectedLabel.TextColor3 = GOLD_DIM
+selectedLabel.TextXAlignment = Enum.TextXAlignment.Left
+selectedLabel.Text = "Selected: 0"
+selectedLabel.Parent = main
+
+local box = Instance.new("TextBox")
+box.Size = UDim2.new(1, -24, 0, 30)
+box.Position = UDim2.new(0, 12, 0, 58)
+box.BackgroundColor3 = ROW
+box.BorderSizePixel = 0
+box.Font = FONT
+box.TextSize = 15
+box.PlaceholderText = "Player name..."
+box.PlaceholderColor3 = Color3.fromRGB(140, 110, 25)
+box.Text = ""
+box.TextColor3 = GOLD
+box.ClearTextOnFocus = false
+box.Parent = main
+round(box, 6)
+
+local function mkButton(text, right, y)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.new(0.5, -18, 0, 30)
+	b.Position = right and UDim2.new(0.5, 6, 0, y) or UDim2.new(0, 12, 0, y)
+	b.BackgroundColor3 = FILL
+	b.BorderSizePixel = 0
+	b.Font = FONT
+	b.TextSize = 14
+	b.TextColor3 = GOLD
+	b.Text = text
+	b.AutoButtonColor = true
+	b.Parent = main
+	round(b, 6)
+	return b
+end
+
+local function paintToggle(btn, label, on)
+	btn.Text = label .. (on and ": ON" or ": OFF")
+	btn.TextSize = 13
+	btn.BackgroundColor3 = on and FILL_ON or FILL
+	btn.TextColor3 = on and BG or GOLD
+end
+
+local glueBtn     = mkButton("Glue", false, 96)
+local stopBtn     = mkButton("Stop", true,  96)
+local invisBtn    = mkButton("", false, 132)
+local spectateBtn = mkButton("", true,  132)
+local voidBtn     = mkButton("", false, 168)
+local vkBtn       = mkButton("", true,  168)
+
+local function paintGlue(on)
+	glueBtn.BackgroundColor3 = on and FILL_ON or FILL
+	glueBtn.TextColor3 = on and BG or GOLD
+end
+
+paintToggle(invisBtn, "Invisible", invisOn)
+paintToggle(spectateBtn, "Spectate", spectateOn)
+paintToggle(voidBtn, "Antivoid", voidOn)
+paintToggle(vkBtn, "Voidkill", voidkillOn)
+
+local status = Instance.new("TextLabel")
+status.Size = UDim2.new(1, -24, 0, 42)
+status.Position = UDim2.new(0, 12, 0, 208)
+status.BackgroundTransparency = 1
+status.Font = FONT
+status.TextSize = 12
+status.TextWrapped = true
+status.TextColor3 = GOLD_DIM
+status.TextXAlignment = Enum.TextXAlignment.Left
+status.TextYAlignment = Enum.TextYAlignment.Top
+status.Parent = main
+
+local function setStatus(text)
+	status.Text = text
+end
+
+local function updateSelected()
+	local n = 0
+	for _ in pairs(Selected) do n += 1 end
+	selectedLabel.Text = "Selected: " .. n
+end
+
+onState = setStatus
+
+setStatus(sethiddenproperty and "sethiddenproperty: OK" or "sethiddenproperty: MISSING (glue won't attach)")
+
+glueBtn.MouseButton1Click:Connect(function()
+	local p = findPlayer(box.Text)
+	if not p then
+		setStatus("No player found for \"" .. box.Text .. "\"")
+		return
+	end
+
+	local isFriend = lookupFriend(p)
+	if isFriend == true then
+		setStatus(p.DisplayName .. " is on your whitelist (friend), not targeted")
+		return
+	elseif isFriend == nil then
+		setStatus("Couldn't check if " .. p.Name .. " is your friend, try again")
+		return
+	end
+
+	for k in pairs(Selected) do Selected[k] = nil end   -- one target at a time
+	Selected[p.UserId] = true
+	updateSelected()
+
+	start(p)   -- runs until Stop is pressed
+	paintGlue(true)
+end)
+
+stopBtn.MouseButton1Click:Connect(function()
+	stop()
+	paintGlue(false)
+	setStatus("Stopped")
+end)
+
+invisBtn.MouseButton1Click:Connect(function()
+	setInvisible(not invisOn)
+	paintToggle(invisBtn, "Invisible", invisOn)
+end)
+
+spectateBtn.MouseButton1Click:Connect(function()
+	spectateOn = not spectateOn
+	paintToggle(spectateBtn, "Spectate", spectateOn)
+	if not spectateOn then
+		restoreCamera()
+	end
+end)
+
+voidBtn.MouseButton1Click:Connect(function()
+	if voidkillOn and voidOn then return end   -- Voidkill needs Antivoid: turn Voidkill off first
+	setAntivoid(not voidOn)
+	paintToggle(voidBtn, "Antivoid", voidOn)
+end)
+
+vkBtn.MouseButton1Click:Connect(function()
+	setVoidkill(not voidkillOn)
+	paintToggle(vkBtn, "Voidkill", voidkillOn)
+	paintToggle(voidBtn, "Antivoid", voidOn)
+end)
+
+closeBtn.MouseButton1Click:Connect(function()
+	if getgenv().GlueStop then getgenv().GlueStop() end
+end)
+
+getgenv().GlueStop = function()
+	if whitelistConn then whitelistConn:Disconnect() end
+	stop()
+	setInvisible(false)
+	setVoidkill(false)
+	setAntivoid(false)
+	gui:Destroy()
+end
