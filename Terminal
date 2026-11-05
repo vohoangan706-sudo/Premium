@@ -398,38 +398,78 @@ do
 	local terminalButton = makeModeButton(">_", -102)
 	local executorButton = makeModeButton("{}", -68)
 
-	-- multi-line code editor (executor mode only)
+	-- Code editor that fills the whole panel body (executor mode only).
+	-- The line-number gutter and the text box live in the same scrolling
+	-- frame, so they scroll together.
+	local EDITOR_FONT_SIZE = 14
+	local GUTTER_WIDTH = 40
+
+	local editorScroll = Instance.new("ScrollingFrame")
+	editorScroll.Position = UDim2.new(0, 8, 0, 32)
+	editorScroll.Size = UDim2.new(1, -16, 1, -76) -- same area the console uses
+	editorScroll.BackgroundColor3 = Color3.fromRGB(20, 15, 0)
+	editorScroll.BorderSizePixel = 0
+	editorScroll.ScrollBarThickness = 4
+	editorScroll.ScrollingDirection = Enum.ScrollingDirection.XY
+	editorScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+	editorScroll.AutomaticCanvasSize = Enum.AutomaticSize.XY
+	editorScroll.Visible = false
+	editorScroll.Parent = panelFrame
+
+	local editorCorner = Instance.new("UICorner")
+	editorCorner.CornerRadius = UDim.new(0, 4)
+	editorCorner.Parent = editorScroll
+
+	local lineNumbers = Instance.new("TextLabel")
+	lineNumbers.Size = UDim2.new(0, GUTTER_WIDTH, 0, 0)
+	lineNumbers.AutomaticSize = Enum.AutomaticSize.Y
+	lineNumbers.Position = UDim2.new(0, 0, 0, 0)
+	lineNumbers.BackgroundColor3 = Color3.fromRGB(30, 22, 0)
+	lineNumbers.BorderSizePixel = 0
+	lineNumbers.Font = Enum.Font.Code
+	lineNumbers.TextSize = EDITOR_FONT_SIZE
+	lineNumbers.TextColor3 = Color3.fromRGB(150, 115, 0)
+	lineNumbers.TextXAlignment = Enum.TextXAlignment.Right
+	lineNumbers.TextYAlignment = Enum.TextYAlignment.Top
+	lineNumbers.Text = "1"
+	lineNumbers.Parent = editorScroll
+
+	local gutterPadding = Instance.new("UIPadding")
+	gutterPadding.PaddingRight = UDim.new(0, 6)
+	gutterPadding.Parent = lineNumbers
+
 	local codeBox = Instance.new("TextBox")
-	codeBox.Size = UDim2.new(1, -16, 0, 92)
-	codeBox.Position = UDim2.new(0, 8, 1, -132)
-	codeBox.BackgroundColor3 = Color3.fromRGB(20, 15, 0)
+	codeBox.Position = UDim2.new(0, GUTTER_WIDTH + 4, 0, 0)
+	codeBox.Size = UDim2.new(0, 410, 0, 240) -- minimum; grows with the text
+	codeBox.AutomaticSize = Enum.AutomaticSize.XY
+	codeBox.BackgroundTransparency = 1
 	codeBox.TextColor3 = AMBER
 	codeBox.PlaceholderText = "-- type or paste Lua here, then press Run"
 	codeBox.PlaceholderColor3 = Color3.fromRGB(120, 95, 0)
 	codeBox.Font = Enum.Font.Code
-	codeBox.TextSize = 14
+	codeBox.TextSize = EDITOR_FONT_SIZE
 	codeBox.MultiLine = true
 	codeBox.TextWrapped = false
 	codeBox.ClearTextOnFocus = false
 	codeBox.TextXAlignment = Enum.TextXAlignment.Left
 	codeBox.TextYAlignment = Enum.TextYAlignment.Top
 	codeBox.Text = ""
-	codeBox.Visible = false
-	codeBox.Parent = panelFrame
+	codeBox.Parent = editorScroll
 
-	local codeCorner = Instance.new("UICorner")
-	codeCorner.CornerRadius = UDim.new(0, 4)
-	codeCorner.Parent = codeBox
+	local function updateLineNumbers()
+		local _, newlines = codeBox.Text:gsub("\n", "")
+		local numbers = table.create(newlines + 1)
+		for i = 1, newlines + 1 do
+			numbers[i] = tostring(i)
+		end
+		lineNumbers.Text = table.concat(numbers, "\n")
+	end
+	codeBox:GetPropertyChangedSignal("Text"):Connect(updateLineNumbers)
 
-	local codePadding = Instance.new("UIPadding")
-	codePadding.PaddingLeft = UDim.new(0, 8)
-	codePadding.PaddingTop = UDim.new(0, 6)
-	codePadding.Parent = codeBox
-
-	local function makeCodeButton(text, scaleX, offsetX)
+	local function makeCodeButton(text, xOffset)
 		local button = Instance.new("TextButton")
-		button.Size = UDim2.new(0.5, -12, 0, 28)
-		button.Position = UDim2.new(scaleX, offsetX, 1, -36)
+		button.Size = UDim2.new(0, 70, 0, 28)
+		button.Position = UDim2.new(0, xOffset, 1, -36)
 		button.BackgroundColor3 = IDLE_BG
 		button.TextColor3 = AMBER
 		button.Font = Enum.Font.Code
@@ -444,26 +484,39 @@ do
 		return button
 	end
 
-	local runButton = makeCodeButton("Run", 0, 8)
-	local clearCodeButton = makeCodeButton("Clear", 0.5, 4)
+	local runButton = makeCodeButton("Run", 8)
+	local clearCodeButton = makeCodeButton("Clear", 84)
 
-	local terminalOutputSize = outputFrame.Size
-	local executorOutputSize = UDim2.new(1, -16, 1, -172)
+	-- one-line result strip next to the buttons (the full console is hidden
+	-- in this mode; switch back to >_ to read the whole history)
+	local resultLabel = Instance.new("TextLabel")
+	resultLabel.Position = UDim2.new(0, 160, 1, -36)
+	resultLabel.Size = UDim2.new(1, -168, 0, 28)
+	resultLabel.BackgroundTransparency = 1
+	resultLabel.Font = Enum.Font.Code
+	resultLabel.TextSize = 13
+	resultLabel.TextColor3 = AMBER
+	resultLabel.TextXAlignment = Enum.TextXAlignment.Left
+	resultLabel.TextTruncate = Enum.TextTruncate.AtEnd
+	resultLabel.Text = ""
+	resultLabel.Visible = false
+	resultLabel.Parent = panelFrame
 
 	local function setExecutorMode(on)
 		inputBox.Visible = not on
-		codeBox.Visible = on
+		outputFrame.Visible = not on
+		editorScroll.Visible = on
 		runButton.Visible = on
 		clearCodeButton.Visible = on
-		outputFrame.Size = on and executorOutputSize or terminalOutputSize
+		resultLabel.Visible = on
 		terminalButton.BackgroundColor3 = on and IDLE_BG or ACTIVE_BG
 		executorButton.BackgroundColor3 = on and ACTIVE_BG or IDLE_BG
 		if on then
 			inputBox:ReleaseFocus()
 		else
 			codeBox:ReleaseFocus()
+			outputFrame.CanvasPosition = Vector2.new(0, math.huge)
 		end
-		outputFrame.CanvasPosition = Vector2.new(0, math.huge)
 	end
 
 	setExecutorMode(false) -- terminal is the default
@@ -490,34 +543,41 @@ do
 		return table.concat(parts, "\t")
 	end
 
+	-- writes to the full console AND the one-line strip
+	local function report(text, color)
+		addLine(text, color)
+		resultLabel.Text = text
+		resultLabel.TextColor3 = color
+	end
+
 	local function runCode()
 		local code = codeBox.Text
 		if not code:match("%S") then
-			addLine("{} nothing to run.", RED)
+			report("{} nothing to run.", RED)
 			return
 		end
 
-		addLine("{} running...", Color3.fromRGB(255, 220, 120))
+		report("{} running...", Color3.fromRGB(255, 220, 120))
 		task.spawn(function()
 			local ok, fn, compileErr = pcall(loadstring, code)
 			if not ok then
-				addLine("{} loadstring unavailable: " .. tostring(fn), RED)
+				report("{} loadstring unavailable: " .. tostring(fn), RED)
 				return
 			end
 			if type(fn) ~= "function" then
-				addLine("{} compile error: " .. tostring(compileErr), RED)
+				report("{} compile error: " .. tostring(compileErr), RED)
 				return
 			end
 
-			-- show print()/warn() in this console as well as the normal output
+			-- show print()/warn() in the console and the strip as well as the normal output
 			pcall(function()
 				local env = setmetatable({
 					print = function(...)
-						addLine(joinArgs(...), AMBER)
+						report(joinArgs(...), AMBER)
 						realPrint(...)
 					end,
 					warn = function(...)
-						addLine(joinArgs(...), Color3.fromRGB(255, 220, 120))
+						report(joinArgs(...), Color3.fromRGB(255, 220, 120))
 						realWarn(...)
 					end,
 				}, { __index = getfenv(fn) })
@@ -526,9 +586,9 @@ do
 
 			local runOk, runErr = pcall(fn)
 			if runOk then
-				addLine("{} done.", Color3.fromRGB(150, 255, 150))
+				report("{} done.", Color3.fromRGB(150, 255, 150))
 			else
-				addLine("{} error: " .. tostring(runErr), RED)
+				report("{} error: " .. tostring(runErr), RED)
 			end
 		end)
 	end
