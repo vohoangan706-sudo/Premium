@@ -33,19 +33,72 @@ local ADMIN_USER_IDS = {
 	3101624536,
 	11535922291,
 	11517308890,
- 11779102275,
- 11717723065,
+	11779102275,
+	11717723065,
 }
 
--- Anyone not in the list above gets kicked with this message, and
--- nothing below this line ever runs for them. Set KICK_NON_ADMINS to
--- false to go back to silently doing nothing instead of kicking.
+-- Anyone not in the list above gets a full-screen white "jumpscare"
+-- with two lines of text, then is kicked after JUMPSCARE_SECONDS with
+-- KICK_MESSAGE. Nothing below this block ever runs for them. Set
+-- KICK_NON_ADMINS to false to go back to silently doing nothing.
 local KICK_NON_ADMINS = true
-local KICK_MESSAGE = "no bro"
+local KICK_MESSAGE = "._.___._..._._.._"
+local JUMPSCARE_SECONDS = 4
+local JUMPSCARE_LINE_1 = "空に見えますか？"
+local JUMPSCARE_LINE_2 = "見ないでください。重大な結果"
 
 if not table.find(ADMIN_USER_IDS, player.UserId) then
 	if KICK_NON_ADMINS then
-		player:Kick(KICK_MESSAGE)
+		-- full-screen white cover with the two lines centered, on top of everything
+		local scareGui = Instance.new("ScreenGui")
+		scareGui.Name = "AccessDenied"
+		scareGui.IgnoreGuiInset = true
+		scareGui.ResetOnSpawn = false
+		scareGui.DisplayOrder = 2147483647
+		scareGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+
+		local cover = Instance.new("Frame")
+		cover.Size = UDim2.new(1, 0, 1, 0)
+		cover.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+		cover.BorderSizePixel = 0
+		cover.Active = true -- swallow clicks/taps so nothing underneath is usable
+		cover.Parent = scareGui
+
+		local textHolder = Instance.new("Frame")
+		textHolder.AnchorPoint = Vector2.new(0.5, 0.5)
+		textHolder.Position = UDim2.new(0.5, 0, 0.5, 0)
+		textHolder.Size = UDim2.new(1, -40, 0, 110)
+		textHolder.BackgroundTransparency = 1
+		textHolder.Parent = cover
+
+		local textLayout = Instance.new("UIListLayout")
+		textLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+		textLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+		textLayout.Padding = UDim.new(0, 14)
+		textLayout.Parent = textHolder
+
+		local function addScareLine(text, size, order)
+			local label = Instance.new("TextLabel")
+			label.LayoutOrder = order
+			label.Size = UDim2.new(1, 0, 0, size + 14)
+			label.BackgroundTransparency = 1
+			label.Text = text
+			label.TextColor3 = Color3.fromRGB(0, 0, 0)
+			label.Font = Enum.Font.SourceSansBold
+			label.TextSize = size
+			label.TextWrapped = true
+			label.Parent = textHolder
+		end
+		addScareLine(JUMPSCARE_LINE_1, 40, 1)
+		addScareLine(JUMPSCARE_LINE_2, 32, 2)
+
+		pcall(function()
+			scareGui.Parent = player:WaitForChild("PlayerGui", 5)
+		end)
+
+		task.delay(JUMPSCARE_SECONDS, function()
+			player:Kick(KICK_MESSAGE)
+		end)
 	end
 	return -- not an admin: nothing below this line ever runs for you
 end
@@ -58,7 +111,7 @@ end
 -------------------------------------------------
 
 -- Bump this number every time something new is added to the panel.
-local PANEL_TITLE = "Aetherfinix v1.15"
+local PANEL_TITLE = "Aetherfinix v1.16"
 
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "TerminalPanelPremium"
@@ -67,6 +120,8 @@ screenGui.Parent = player:WaitForChild("PlayerGui")
 
 local outputFrame
 local inputBox
+local panelFrame     -- main panel frame, shared with the mode switch below
+local panelTitleBar  -- title bar, where the >_ and {} buttons live
 
 do
 	local frame = Instance.new("Frame")
@@ -98,7 +153,7 @@ do
 	titleCorner.Parent = titleBar
 
 	local titleLabel = Instance.new("TextLabel")
-	titleLabel.Size = UDim2.new(1, -46, 1, 0)
+	titleLabel.Size = UDim2.new(1, -110, 1, 0)
 	titleLabel.Position = UDim2.new(0, 10, 0, 0)
 	titleLabel.BackgroundTransparency = 1
 	titleLabel.Text = PANEL_TITLE
@@ -177,6 +232,9 @@ do
 	local inputPadding = Instance.new("UIPadding")
 	inputPadding.PaddingLeft = UDim.new(0, 8)
 	inputPadding.Parent = inputBox
+
+	panelFrame = frame
+	panelTitleBar = titleBar
 
 	titleBar.Active = true
 
@@ -301,6 +359,181 @@ local function clearConsole()
 			child:Destroy()
 		end
 	end
+end
+
+-------------------------------------------------
+-- TERMINAL / LUA EXECUTOR MODE SWITCH
+-- Two small buttons in the title bar:
+--   ">_"  terminal mode (default) - the normal command input
+--   "{}"  Lua executor mode - a multi-line code box with Run / Clear;
+--         whatever you type is run as Lua, and print()/warn() output
+--         and errors are shown in the same console above it.
+-- Executor mode needs loadstring, which only exists in some
+-- environments (executors) - if it's missing you'll see an error line.
+-------------------------------------------------
+
+do
+	local ACTIVE_BG = Color3.fromRGB(120, 90, 0)
+	local IDLE_BG = Color3.fromRGB(60, 45, 0)
+	local AMBER = Color3.fromRGB(255, 200, 0)
+	local RED = Color3.fromRGB(255, 150, 150)
+
+	local function makeModeButton(text, xOffset)
+		local button = Instance.new("TextButton")
+		button.Size = UDim2.new(0, 28, 0, 20)
+		button.Position = UDim2.new(1, xOffset, 0.5, -10)
+		button.BackgroundColor3 = IDLE_BG
+		button.TextColor3 = AMBER
+		button.Font = Enum.Font.Code
+		button.TextSize = 14
+		button.Text = text
+		button.Parent = panelTitleBar
+
+		local buttonCorner = Instance.new("UICorner")
+		buttonCorner.CornerRadius = UDim.new(0, 4)
+		buttonCorner.Parent = button
+		return button
+	end
+
+	local terminalButton = makeModeButton(">_", -102)
+	local executorButton = makeModeButton("{}", -68)
+
+	-- multi-line code editor (executor mode only)
+	local codeBox = Instance.new("TextBox")
+	codeBox.Size = UDim2.new(1, -16, 0, 92)
+	codeBox.Position = UDim2.new(0, 8, 1, -132)
+	codeBox.BackgroundColor3 = Color3.fromRGB(20, 15, 0)
+	codeBox.TextColor3 = AMBER
+	codeBox.PlaceholderText = "-- type or paste Lua here, then press Run"
+	codeBox.PlaceholderColor3 = Color3.fromRGB(120, 95, 0)
+	codeBox.Font = Enum.Font.Code
+	codeBox.TextSize = 14
+	codeBox.MultiLine = true
+	codeBox.TextWrapped = false
+	codeBox.ClearTextOnFocus = false
+	codeBox.TextXAlignment = Enum.TextXAlignment.Left
+	codeBox.TextYAlignment = Enum.TextYAlignment.Top
+	codeBox.Text = ""
+	codeBox.Visible = false
+	codeBox.Parent = panelFrame
+
+	local codeCorner = Instance.new("UICorner")
+	codeCorner.CornerRadius = UDim.new(0, 4)
+	codeCorner.Parent = codeBox
+
+	local codePadding = Instance.new("UIPadding")
+	codePadding.PaddingLeft = UDim.new(0, 8)
+	codePadding.PaddingTop = UDim.new(0, 6)
+	codePadding.Parent = codeBox
+
+	local function makeCodeButton(text, scaleX, offsetX)
+		local button = Instance.new("TextButton")
+		button.Size = UDim2.new(0.5, -12, 0, 28)
+		button.Position = UDim2.new(scaleX, offsetX, 1, -36)
+		button.BackgroundColor3 = IDLE_BG
+		button.TextColor3 = AMBER
+		button.Font = Enum.Font.Code
+		button.TextSize = 15
+		button.Text = text
+		button.Visible = false
+		button.Parent = panelFrame
+
+		local buttonCorner = Instance.new("UICorner")
+		buttonCorner.CornerRadius = UDim.new(0, 4)
+		buttonCorner.Parent = button
+		return button
+	end
+
+	local runButton = makeCodeButton("Run", 0, 8)
+	local clearCodeButton = makeCodeButton("Clear", 0.5, 4)
+
+	local terminalOutputSize = outputFrame.Size
+	local executorOutputSize = UDim2.new(1, -16, 1, -172)
+
+	local function setExecutorMode(on)
+		inputBox.Visible = not on
+		codeBox.Visible = on
+		runButton.Visible = on
+		clearCodeButton.Visible = on
+		outputFrame.Size = on and executorOutputSize or terminalOutputSize
+		terminalButton.BackgroundColor3 = on and IDLE_BG or ACTIVE_BG
+		executorButton.BackgroundColor3 = on and ACTIVE_BG or IDLE_BG
+		if on then
+			inputBox:ReleaseFocus()
+		else
+			codeBox:ReleaseFocus()
+		end
+		outputFrame.CanvasPosition = Vector2.new(0, math.huge)
+	end
+
+	setExecutorMode(false) -- terminal is the default
+
+	terminalButton.MouseButton1Click:Connect(function()
+		setExecutorMode(false)
+	end)
+	executorButton.MouseButton1Click:Connect(function()
+		setExecutorMode(true)
+	end)
+
+	clearCodeButton.MouseButton1Click:Connect(function()
+		codeBox.Text = ""
+	end)
+
+	local realPrint = print
+	local realWarn = warn
+
+	local function joinArgs(...)
+		local parts = {}
+		for i = 1, select("#", ...) do
+			parts[i] = tostring((select(i, ...)))
+		end
+		return table.concat(parts, "\t")
+	end
+
+	local function runCode()
+		local code = codeBox.Text
+		if not code:match("%S") then
+			addLine("{} nothing to run.", RED)
+			return
+		end
+
+		addLine("{} running...", Color3.fromRGB(255, 220, 120))
+		task.spawn(function()
+			local ok, fn, compileErr = pcall(loadstring, code)
+			if not ok then
+				addLine("{} loadstring unavailable: " .. tostring(fn), RED)
+				return
+			end
+			if type(fn) ~= "function" then
+				addLine("{} compile error: " .. tostring(compileErr), RED)
+				return
+			end
+
+			-- show print()/warn() in this console as well as the normal output
+			pcall(function()
+				local env = setmetatable({
+					print = function(...)
+						addLine(joinArgs(...), AMBER)
+						realPrint(...)
+					end,
+					warn = function(...)
+						addLine(joinArgs(...), Color3.fromRGB(255, 220, 120))
+						realWarn(...)
+					end,
+				}, { __index = getfenv(fn) })
+				setfenv(fn, env)
+			end)
+
+			local runOk, runErr = pcall(fn)
+			if runOk then
+				addLine("{} done.", Color3.fromRGB(150, 255, 150))
+			else
+				addLine("{} error: " .. tostring(runErr), RED)
+			end
+		end)
+	end
+
+	runButton.MouseButton1Click:Connect(runCode)
 end
 
 -------------------------------------------------
@@ -792,9 +1025,6 @@ local PLACES = {
 	{ name = "Deepvoid", position = Vector3.new(0, -10000, 0), platformFn = createPlacePlatform },
 	{ name = "Null Zone", position = Vector3.new(100000000, 100000000, 100000000), platformFn = nil },
 	{ name = "The Sky", position = Vector3.new(0, 2000, 0), platformFn = createPlacePlatform },
-	{ name = "Death counter", position = Vector3.new(-92, 29, 20347), platformFn = createPlacePlatform },
-	{ name = "Atomic slash", position = Vector3.new(1079, 155, 23003), platformFn = createPlacePlatform },
-	{ name = "Baseplate", position = Vector3.new(-92, 29, 20347), platformFn = createPlacePlatform },
 }
 
 local currentPlaceTarget = nil
@@ -1590,37 +1820,63 @@ end
 local commands = {}
 
 -- ######################################################################
--- #  CHECK2 CUSTOM CODE ZONE
+-- #  FAST CHILD EMPEROR VOID (`fastchild`) CUSTOM CODE ZONE
 -- #  The old built-in check2 was removed. Whatever you paste between
--- #  the "START" and "END" lines below runs when you type `check2`.
+-- #  the "START" and "END" lines below runs when you type `fastchild`
+-- #  (or the long name `fastchildemperorvoid`).
 -- #  Locals in here don't count toward the 200-local limit.
 -- #  Whatever string you `return` is printed in the terminal.
 -- ######################################################################
-commands["childvoid"] = function(args)
+commands["fastchild"] = function(args)
 	-- vvvvvvvvvvvvvvvvvvvv  START OF YOUR CODE  vvvvvvvvvvvvvvvvvvvv
-loadstring(game:HttpGet("https://raw.githubusercontent.com/vohoangan706-sudo/Premium/refs/heads/main/child"))()
+	-- Runs in its own thread so the terminal doesn't freeze while the
+	-- script downloads, and any error is printed instead of silently lost.
+	task.spawn(function()
+		local ok, err = pcall(function()
+			loadstring(game:HttpGet("https://raw.githubusercontent.com/vohoangan706-sudo/Premium/refs/heads/main/child"))()
+		end)
+		if not ok then
+			addLine("Fast Child Emperor Void failed: " .. tostring(err), Color3.fromRGB(255, 150, 150))
+		end
+	end)
 	-- ^^^^^^^^^^^^^^^^^^^^  END OF YOUR CODE  ^^^^^^^^^^^^^^^^^^^^
-	return "Child void ran."
+	return "Fast Child Emperor Void loading..."
 end
+
+-- long name for the same command
+commands["fastchildemperorvoid"] = commands["fastchild"]
 -- ######################################################################
--- #  END OF CHECK2 CUSTOM CODE ZONE
+-- #  END OF FAST CHILD EMPEROR VOID CUSTOM CODE ZONE
 -- ######################################################################
 
 -- ######################################################################
--- #  TRUECHECK CUSTOM CODE ZONE
+-- #  SUIRYU VOID (`suiryuvoid`) CUSTOM CODE ZONE
 -- #  The old built-in truecheck was removed. Whatever you paste between
--- #  the "START" and "END" lines below runs when you type `truecheck`.
+-- #  the "START" and "END" lines below runs when you type `suiryuvoid`
+-- #  (or the short name `suiryu`).
 -- #  Locals in here don't count toward the 200-local limit.
 -- #  Whatever string you `return` is printed in the terminal.
 -- ######################################################################
 commands["suiryuvoid"] = function(args)
 	-- vvvvvvvvvvvvvvvvvvvv  START OF YOUR CODE  vvvvvvvvvvvvvvvvvvvv
-loadstring(game:HttpGet("https://raw.githubusercontent.com/vohoangan706-sudo/Premium/refs/heads/main/suiryu"))()
+	-- Runs in its own thread so the terminal doesn't freeze while the
+	-- script downloads, and any error is printed instead of silently lost.
+	task.spawn(function()
+		local ok, err = pcall(function()
+			loadstring(game:HttpGet("https://raw.githubusercontent.com/vohoangan706-sudo/Premium/refs/heads/main/suiryu"))()
+		end)
+		if not ok then
+			addLine("Suiryu Void failed: " .. tostring(err), Color3.fromRGB(255, 150, 150))
+		end
+	end)
 	-- ^^^^^^^^^^^^^^^^^^^^  END OF YOUR CODE  ^^^^^^^^^^^^^^^^^^^^
-	return "suiryu void ran."
+	return "Suiryu Void loading..."
 end
+
+-- short name for the same command
+commands["suiryu"] = commands["suiryuvoid"]
 -- ######################################################################
--- #  END OF TRUECHECK CUSTOM CODE ZONE
+-- #  END OF SUIRYU VOID CUSTOM CODE ZONE
 -- ######################################################################
 
 commands["godmode"] = function(args)
@@ -1665,9 +1921,18 @@ end
 -- ######################################################################
 commands["attractor"] = function(args)
 	-- vvvvvvvvvvvvvvvvvvvv  START OF YOUR CODE  vvvvvvvvvvvvvvvvvvvv
-loadstring(game:HttpGet("https://raw.githubusercontent.com/vohoangan706-sudo/Premium/refs/heads/main/attract"))()
+	-- Runs in its own thread so the terminal doesn't freeze while the
+	-- script downloads, and any error is printed instead of silently lost.
+	task.spawn(function()
+		local ok, err = pcall(function()
+			loadstring(game:HttpGet("https://raw.githubusercontent.com/vohoangan706-sudo/Premium/refs/heads/main/attract"))()
+		end)
+		if not ok then
+			addLine("Attractor failed: " .. tostring(err), Color3.fromRGB(255, 150, 150))
+		end
+	end)
 	-- ^^^^^^^^^^^^^^^^^^^^  END OF YOUR CODE  ^^^^^^^^^^^^^^^^^^^^
-	return "Attractor ran."
+	return "Attractor loading..."
 end
 -- ######################################################################
 -- #  END OF ATTRACTOR CUSTOM CODE ZONE
