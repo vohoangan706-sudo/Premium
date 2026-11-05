@@ -338,12 +338,18 @@ end
 -- CONSOLE OUTPUT HELPERS
 -------------------------------------------------
 
+local themeState = { text = nil } -- set by os.theme (Aetherfinix Linux)
+local linuxHooks = {}             -- filled in by the {} editor, used by Aetherfinix Linux
+
 local function addLine(text, color)
 	local line = Instance.new("TextLabel")
 	line.Size = UDim2.new(1, 0, 0, 18)
 	line.BackgroundTransparency = 1
 	line.Text = text
 	line.TextColor3 = color or Color3.fromRGB(255, 200, 0)
+	if themeState.text and (not color or color == Color3.fromRGB(255, 200, 0) or color == Color3.fromRGB(255, 220, 120)) then
+		line.TextColor3 = themeState.text
+	end
 	line.Font = Enum.Font.Code
 	line.TextSize = 15
 	line.TextXAlignment = Enum.TextXAlignment.Left
@@ -550,6 +556,16 @@ do
 		resultLabel.TextColor3 = color
 	end
 
+	linuxHooks.report = report
+	linuxHooks.setMode = setExecutorMode
+	linuxHooks.applyEditorTheme = function(theme)
+		editorScroll.BackgroundColor3 = theme.input
+		lineNumbers.BackgroundColor3 = theme.gutter
+		lineNumbers.TextColor3 = theme.gutterText
+		codeBox.TextColor3 = theme.text
+		resultLabel.TextColor3 = theme.text
+	end
+
 	local function runCode()
 		local code = codeBox.Text
 		if not code:match("%S") then
@@ -581,6 +597,12 @@ do
 						realWarn(...)
 					end,
 				}, { __index = getfenv(fn) })
+				-- extra globals from Aetherfinix Linux (os.notify, ui.button, storage...)
+				if linuxHooks.globals then
+					for name, value in pairs(linuxHooks.globals) do
+						env[name] = value
+					end
+				end
 				setfenv(fn, env)
 			end)
 
@@ -2177,6 +2199,482 @@ commands["ultrasonic"] = function(args)
 end
 
 -- ######################################################################
+-- #  AETHERFINIX LINUX  (hidden command: `pkg install linux`)
+-- #  A tiny make-believe "OS layer" for the {} Lua editor. Once
+-- #  installed, code run from {} mode gets three extra globals:
+-- #    os.notify / os.theme / os.window / os.sound / os.info
+-- #    ui.button
+-- #    storage.set / storage.get   (panel settings, saved to a file)
+-- #  These only exist for code run from {} mode - they are not real
+-- #  Roblox or Lua functions.
+-- ######################################################################
+do
+	local HttpService = game:GetService("HttpService")
+	local StarterGui = game:GetService("StarterGui")
+	local Debris = game:GetService("Debris")
+
+	local SETTINGS_FILE = "AetherfinixSettings.json"
+	local AMBER = Color3.fromRGB(255, 200, 0)
+	local BRIGHT = Color3.fromRGB(255, 220, 120)
+	local GREEN = Color3.fromRGB(150, 255, 150)
+	local RED = Color3.fromRGB(255, 150, 150)
+
+	local function emit(text, color)
+		if linuxHooks.report then
+			linuxHooks.report(text, color or AMBER)
+		else
+			addLine(text, color or AMBER)
+		end
+	end
+
+	---------------------------------------------------------------
+	-- storage: panel settings, saved to a file when the environment
+	-- has writefile/readfile, otherwise kept in memory only
+	---------------------------------------------------------------
+	local settings = {}
+	local canPersist = (type(writefile) == "function" and type(readfile) == "function")
+
+	local function loadSettings()
+		if not canPersist then return end
+		local ok, raw = pcall(function()
+			if type(isfile) == "function" and not isfile(SETTINGS_FILE) then
+				return nil
+			end
+			return readfile(SETTINGS_FILE)
+		end)
+		if ok and type(raw) == "string" and raw ~= "" then
+			local decoded, data = pcall(HttpService.JSONDecode, HttpService, raw)
+			if decoded and type(data) == "table" then
+				settings = data
+			end
+		end
+	end
+
+	local function saveSettings()
+		if not canPersist then return end
+		pcall(function()
+			writefile(SETTINGS_FILE, HttpService:JSONEncode(settings))
+		end)
+	end
+
+	local storage = {}
+
+	function storage.set(key, value)
+		assert(key ~= nil, "storage.set: key is required")
+		if value ~= nil then
+			local okEncode = pcall(HttpService.JSONEncode, HttpService, { value })
+			assert(okEncode, "storage.set: value can't be saved (use text, numbers, booleans or tables)")
+		end
+		settings[tostring(key)] = value
+		saveSettings()
+		return true
+	end
+
+	function storage.get(key)
+		return settings[tostring(key)]
+	end
+
+	---------------------------------------------------------------
+	-- os.theme
+	---------------------------------------------------------------
+	local THEMES = {
+		amber = {
+			panel = Color3.fromRGB(10, 10, 10), input = Color3.fromRGB(20, 15, 0),
+			text = Color3.fromRGB(255, 200, 0), gutter = Color3.fromRGB(30, 22, 0),
+			gutterText = Color3.fromRGB(150, 115, 0),
+		},
+		dark = {
+			panel = Color3.fromRGB(18, 18, 22), input = Color3.fromRGB(30, 30, 36),
+			text = Color3.fromRGB(225, 225, 235), gutter = Color3.fromRGB(26, 26, 32),
+			gutterText = Color3.fromRGB(120, 120, 135),
+		},
+		light = {
+			panel = Color3.fromRGB(235, 235, 240), input = Color3.fromRGB(255, 255, 255),
+			text = Color3.fromRGB(30, 30, 40), gutter = Color3.fromRGB(220, 220, 228),
+			gutterText = Color3.fromRGB(120, 120, 135),
+		},
+	}
+
+	local function applyTheme(name)
+		local theme = THEMES[name]
+		if not theme then return false end
+		panelFrame.BackgroundColor3 = theme.panel
+		inputBox.BackgroundColor3 = theme.input
+		inputBox.TextColor3 = theme.text
+		themeState.text = (name ~= "amber") and theme.text or nil
+		for _, child in ipairs(outputFrame:GetChildren()) do
+			if child:IsA("TextLabel") then
+				child.TextColor3 = theme.text
+			end
+		end
+		if linuxHooks.applyEditorTheme then
+			linuxHooks.applyEditorTheme(theme)
+		end
+		return true
+	end
+
+	---------------------------------------------------------------
+	-- os.window / ui.button
+	---------------------------------------------------------------
+	local lastWindow = nil
+	local windowCount = 0
+
+	local function makeWindow(title, width, height)
+		width = math.clamp(tonumber(width) or 400, 160, 900)
+		height = math.clamp(tonumber(height) or 260, 100, 700)
+		windowCount += 1
+
+		local frame = Instance.new("Frame")
+		frame.Name = "AetherWindow"
+		frame.Size = UDim2.new(0, width, 0, height)
+		frame.Position = UDim2.new(0.5, -width / 2 + windowCount * 14, 0.5, -height / 2 + windowCount * 14)
+		frame.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
+		frame.BorderSizePixel = 0
+		frame.Active = true
+		frame.Parent = screenGui
+
+		local corner = Instance.new("UICorner")
+		corner.CornerRadius = UDim.new(0, 6)
+		corner.Parent = frame
+
+		local stroke = Instance.new("UIStroke")
+		stroke.Color = AMBER
+		stroke.Thickness = 1.5
+		stroke.Parent = frame
+
+		local bar = Instance.new("Frame")
+		bar.Size = UDim2.new(1, 0, 0, 26)
+		bar.BackgroundColor3 = Color3.fromRGB(40, 30, 0)
+		bar.BorderSizePixel = 0
+		bar.Active = true
+		bar.Parent = frame
+
+		local barCorner = Instance.new("UICorner")
+		barCorner.CornerRadius = UDim.new(0, 6)
+		barCorner.Parent = bar
+
+		local titleLabel = Instance.new("TextLabel")
+		titleLabel.Size = UDim2.new(1, -36, 1, 0)
+		titleLabel.Position = UDim2.new(0, 8, 0, 0)
+		titleLabel.BackgroundTransparency = 1
+		titleLabel.Font = Enum.Font.Code
+		titleLabel.TextSize = 14
+		titleLabel.TextColor3 = AMBER
+		titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+		titleLabel.TextTruncate = Enum.TextTruncate.AtEnd
+		titleLabel.Text = tostring(title or "Window")
+		titleLabel.Parent = bar
+
+		local closeButton = Instance.new("TextButton")
+		closeButton.Size = UDim2.new(0, 22, 0, 18)
+		closeButton.Position = UDim2.new(1, -26, 0, 4)
+		closeButton.BackgroundColor3 = Color3.fromRGB(90, 30, 0)
+		closeButton.TextColor3 = AMBER
+		closeButton.Font = Enum.Font.Code
+		closeButton.TextSize = 14
+		closeButton.Text = "X"
+		closeButton.Parent = bar
+
+		local closeCorner = Instance.new("UICorner")
+		closeCorner.CornerRadius = UDim.new(0, 4)
+		closeCorner.Parent = closeButton
+
+		local content = Instance.new("ScrollingFrame")
+		content.Position = UDim2.new(0, 6, 0, 32)
+		content.Size = UDim2.new(1, -12, 1, -38)
+		content.BackgroundTransparency = 1
+		content.BorderSizePixel = 0
+		content.ScrollBarThickness = 4
+		content.CanvasSize = UDim2.new(0, 0, 0, 0)
+		content.AutomaticCanvasSize = Enum.AutomaticSize.Y
+		content.Parent = frame
+
+		local layout = Instance.new("UIListLayout")
+		layout.Padding = UDim.new(0, 6)
+		layout.SortOrder = Enum.SortOrder.LayoutOrder
+		layout.Parent = content
+
+		-- drag by the title bar
+		local dragging, dragStart, startPos = false, nil, nil
+		bar.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1
+				or input.UserInputType == Enum.UserInputType.Touch then
+				dragging = true
+				dragStart = input.Position
+				startPos = frame.Position
+				input.Changed:Connect(function()
+					if input.UserInputState == Enum.UserInputState.End then
+						dragging = false
+					end
+				end)
+			end
+		end)
+		UserInputService.InputChanged:Connect(function(input)
+			if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
+				or input.UserInputType == Enum.UserInputType.Touch) then
+				local delta = input.Position - dragStart
+				frame.Position = UDim2.new(
+					startPos.X.Scale, startPos.X.Offset + delta.X,
+					startPos.Y.Scale, startPos.Y.Offset + delta.Y
+				)
+			end
+		end)
+
+		local window = { Frame = frame, Content = content }
+		function window.Close()
+			if lastWindow == window then lastWindow = nil end
+			frame:Destroy()
+		end
+		closeButton.MouseButton1Click:Connect(window.Close)
+
+		lastWindow = window
+		return window
+	end
+
+	local ui = {}
+
+	function ui.button(text, callback)
+		if not lastWindow or not lastWindow.Frame.Parent then
+			makeWindow("Launcher", 300, 200)
+		end
+		local button = Instance.new("TextButton")
+		button.Size = UDim2.new(1, -8, 0, 30)
+		button.BackgroundColor3 = Color3.fromRGB(60, 45, 0)
+		button.TextColor3 = AMBER
+		button.Font = Enum.Font.Code
+		button.TextSize = 15
+		button.Text = tostring(text or "Button")
+		button.Parent = lastWindow.Content
+
+		local buttonCorner = Instance.new("UICorner")
+		buttonCorner.CornerRadius = UDim.new(0, 4)
+		buttonCorner.Parent = button
+
+		button.MouseButton1Click:Connect(function()
+			if type(callback) == "function" then
+				-- run on its own thread so an error doesn't break the UI
+				task.spawn(function()
+					local ok, err = pcall(callback)
+					if not ok then
+						emit("ui.button error: " .. tostring(err), RED)
+					end
+				end)
+			end
+		end)
+		return button
+	end
+
+	---------------------------------------------------------------
+	-- the extra `os` functions
+	---------------------------------------------------------------
+	local linuxOs = {}
+
+	function linuxOs.notify(message, title)
+		message = tostring(message)
+		emit("[notify] " .. message, BRIGHT)
+		pcall(function()
+			StarterGui:SetCore("SendNotification", {
+				Title = tostring(title or "Aetherfinix Linux"),
+				Text = message,
+				Duration = 4,
+			})
+		end)
+	end
+
+	function linuxOs.theme(name)
+		name = tostring(name or ""):lower()
+		if not THEMES[name] then
+			error("os.theme: unknown theme '" .. name .. "' (try dark, light or amber)", 2)
+		end
+		applyTheme(name)
+		storage.set("theme", name)
+	end
+
+	function linuxOs.window(title, width, height)
+		return makeWindow(title, width, height)
+	end
+
+	-- built-in client sounds; a number or a full rbxassetid:// string also works
+	local SOUNDS = {
+		startup = "rbxasset://sounds/electronicpingshort.wav",
+		click = "rbxasset://sounds/button.wav",
+		notify = "rbxasset://sounds/electronicpingshort.wav",
+		error = "rbxasset://sounds/uuhhh.mp3",
+	}
+
+	function linuxOs.sound(name)
+		local id = SOUNDS[tostring(name):lower()]
+		if not id then
+			if tonumber(name) then
+				id = "rbxassetid://" .. tostring(math.floor(tonumber(name)))
+			elseif tostring(name):find("://") then
+				id = tostring(name)
+			else
+				error("os.sound: unknown sound '" .. tostring(name) .. "' (try startup, click, notify, error)", 2)
+			end
+		end
+		local sound = Instance.new("Sound")
+		sound.SoundId = id
+		sound.Volume = 0.6
+		sound.Parent = SoundService
+		sound:Play()
+		Debris:AddItem(sound, 8)
+	end
+
+	function linuxOs.info()
+		local executor = "unknown"
+		pcall(function()
+			if type(identifyexecutor) == "function" then
+				executor = tostring((identifyexecutor()))
+			end
+		end)
+		local fps = 0
+		pcall(function()
+			fps = math.floor(1 / RunService.RenderStepped:Wait() + 0.5)
+		end)
+		local info = {
+			os = "Aetherfinix Linux 1.0",
+			panel = PANEL_TITLE,
+			user = player.Name,
+			userId = player.UserId,
+			placeId = game.PlaceId,
+			players = #Players:GetPlayers(),
+			fps = fps,
+			executor = executor,
+			theme = settings.theme or "amber",
+			storage = canPersist and ("file: " .. SETTINGS_FILE) or "memory only",
+		}
+		local order = { "os", "panel", "user", "userId", "placeId", "players", "fps", "executor", "theme", "storage" }
+		for _, key in ipairs(order) do
+			emit(string.format("  %-9s %s", key, tostring(info[key])), BRIGHT)
+		end
+		return info
+	end
+
+	---------------------------------------------------------------
+	-- boot: hand the new globals to the {} editor
+	---------------------------------------------------------------
+	local booted = false
+
+	local function boot(forceMode)
+		if not booted then
+			booted = true
+			local osEnv = setmetatable(linuxOs, { __index = os })
+			linuxHooks.globals = { os = osEnv, ui = ui, storage = storage }
+			local savedTheme = storage.get("theme")
+			if savedTheme and THEMES[savedTheme] then
+				applyTheme(savedTheme)
+			end
+		end
+		if forceMode and linuxHooks.setMode then
+			linuxHooks.setMode(true)
+		end
+		emit("Aetherfinix Linux start up", GREEN)
+		pcall(linuxOs.sound, "startup")
+	end
+
+	---------------------------------------------------------------
+	-- `pkg install linux`  (hidden from help)
+	---------------------------------------------------------------
+	local INSTALL_LINES = {
+		"Reading package lists... Done",
+		"Building dependency tree... Done",
+		"The following NEW packages will be installed:",
+		"  aether-kernel aether-init aether-libc aether-shell aether-fs",
+		"  aether-ui aether-notify aether-theme aether-audio aether-store",
+		"0 upgraded, 10 newly installed, 0 to remove.",
+		"Need to get 14.2 MB of archives.",
+		"Get:1 aether://repo/main aether-kernel 1.0.0 [4,812 kB]",
+		"Get:2 aether://repo/main aether-init 1.0.0 [212 kB]",
+		"Get:3 aether://repo/main aether-libc 1.0.0 [2,044 kB]",
+		"Get:4 aether://repo/main aether-shell 1.0.0 [688 kB]",
+		"Get:5 aether://repo/main aether-fs 1.0.0 [1,310 kB]",
+		"Get:6 aether://repo/main aether-ui 1.0.0 [2,951 kB]",
+		"Get:7 aether://repo/main aether-notify 1.0.0 [96 kB]",
+		"Get:8 aether://repo/main aether-theme 1.0.0 [188 kB]",
+		"Get:9 aether://repo/main aether-audio 1.0.0 [1,120 kB]",
+		"Get:10 aether://repo/main aether-store 1.0.0 [214 kB]",
+		"Fetched 14.2 MB in 3s (4,733 kB/s)",
+		"Verifying package signatures... OK",
+		"Selecting previously unselected package aether-kernel.",
+		"Preparing to unpack aether-kernel_1.0.0_lua.pkg ...",
+		"Unpacking aether-kernel (1.0.0) ...",
+		"Selecting previously unselected package aether-init.",
+		"Unpacking aether-init (1.0.0) ...",
+		"Selecting previously unselected package aether-libc.",
+		"Unpacking aether-libc (1.0.0) ...",
+		"Selecting previously unselected package aether-shell.",
+		"Unpacking aether-shell (1.0.0) ...",
+		"Selecting previously unselected package aether-fs.",
+		"Unpacking aether-fs (1.0.0) ...",
+		"Selecting previously unselected package aether-ui.",
+		"Unpacking aether-ui (1.0.0) ...",
+		"Selecting previously unselected package aether-notify.",
+		"Unpacking aether-notify (1.0.0) ...",
+		"Selecting previously unselected package aether-theme.",
+		"Unpacking aether-theme (1.0.0) ...",
+		"Selecting previously unselected package aether-audio.",
+		"Unpacking aether-audio (1.0.0) ...",
+		"Selecting previously unselected package aether-store.",
+		"Unpacking aether-store (1.0.0) ...",
+		"Setting up aether-libc (1.0.0) ...",
+		"Setting up aether-kernel (1.0.0) ...",
+		"Mounting /dev/lua0 on / ... OK",
+		"Setting up aether-fs (1.0.0) ...",
+		"Creating /etc/aetherfinix/settings ... OK",
+		"Setting up aether-store (1.0.0) ...",
+		"Setting up aether-shell (1.0.0) ...",
+		"Linking os.* extensions ... OK",
+		"Setting up aether-notify (1.0.0) ...",
+		"Setting up aether-theme (1.0.0) ...",
+		"Setting up aether-audio (1.0.0) ...",
+		"Setting up aether-ui (1.0.0) ...",
+		"Linking ui.* extensions ... OK",
+		"Setting up aether-init (1.0.0) ...",
+		"Processing triggers for aether-init ...",
+		"Registering storage.* extensions ... OK",
+		"Running post-install hooks ... OK",
+		"Installation complete.",
+	}
+
+	local installing = false
+
+	local function installLinux()
+		if installing then
+			return "Install already in progress."
+		end
+		if storage.get("linux_installed") then
+			return "aetherfinix-linux is already installed. (it starts with the panel)"
+		end
+		installing = true
+		task.spawn(function()
+			for _, line in ipairs(INSTALL_LINES) do
+				addLine(line, AMBER)
+				task.wait(0.07)
+			end
+			storage.set("linux_installed", true)
+			installing = false
+			boot(true)
+		end)
+		return "Installing aetherfinix-linux..."
+	end
+
+	commands["pkg"] = function(args)
+		local action = tostring(args[1] or ""):lower()
+		local package = tostring(args[2] or ""):lower()
+		if action == "install" and (package == "linux" or package == "aetherfinix-linux") then
+			return installLinux()
+		end
+		return "Usage: pkg install <package>"
+	end
+
+	loadSettings()
+	if storage.get("linux_installed") then
+		boot(false) -- already installed: start it with the panel
+	end
+end
+
+-- ######################################################################
 -- #  UPDATE LOG ZONE
 -- #  Type `updatelog` in the terminal to print this list.
 -- #  Add one string per line between the START and END lines below.
@@ -2204,10 +2702,14 @@ commands["updatelog"] = function(args)
 	return lines
 end
 
+local hiddenCommands = { pkg = true } -- not listed by help
+
 commands["help"] = function(args)
 	local names = {}
 	for name in pairs(commands) do
-		table.insert(names, name)
+		if not hiddenCommands[name] then
+			table.insert(names, name)
+		end
 	end
 	table.sort(names)
 
