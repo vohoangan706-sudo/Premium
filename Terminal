@@ -344,6 +344,7 @@ local linuxHooks = {}             -- filled in by the {} editor, used by Aetherf
 local function addLine(text, color)
 	local line = Instance.new("TextLabel")
 	line.Size = UDim2.new(1, 0, 0, 18)
+	line.AutomaticSize = Enum.AutomaticSize.Y -- long lines wrap instead of being cut off
 	line.BackgroundTransparency = 1
 	line.Text = text
 	line.TextColor3 = color or Color3.fromRGB(255, 200, 0)
