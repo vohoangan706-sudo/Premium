@@ -1789,7 +1789,7 @@ local function setupLuaOS()
 	end
 
 	local lockOverlay = nil
-	local shutdownAetherfinix Linux -- defined below (os.shutdown / os.restart use it)
+	local shutdownSystem -- defined below (os.shutdown / os.restart use it)
 
 	osLib = {}
 
@@ -1923,8 +1923,8 @@ local function setupLuaOS()
 	end
 	osLib.sysinfo = osLib.info
 
-	function osLib.shutdown() shutdownAetherfinix Linux(false) end
-	function osLib.restart() shutdownAetherfinix Linux(true) end
+	function osLib.shutdown() shutdownSystem(false) end
+	function osLib.restart() shutdownSystem(true) end
 
 	setmetatable(osLib, { __index = realOs })
 
@@ -1954,7 +1954,7 @@ local function setupLuaOS()
 		pcall(audioLib.play, "startup")
 	end
 
-	shutdownAetherfinix Linux = function(restart)
+	shutdownSystem = function(restart)
 		emit("Aetherfinix Linux " .. (restart and "restarting..." or "shutting down..."), BRIGHT)
 		for _, window in ipairs({ table.unpack(windows) }) do closeWindow(window) end
 		pcall(fxLib.stopAll)
