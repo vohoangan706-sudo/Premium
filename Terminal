@@ -2220,10 +2220,20 @@ do
 			return false, "Aetherfinix Linux is still loading..."
 		end
 		loading = true
+		local stage = "downloading"
 		local ok, err = pcall(function()
 			local source = game:HttpGet(AETHERFINIX_LINUX_URL)
+			if type(source) ~= "string" or source == "" then
+				error("the download was empty (check the URL)", 0)
+			end
+			stage = "compiling (" .. #source .. " bytes)"
 			local chunk, compileErr = loadstring(source)
-			assert(chunk, compileErr)
+			if type(chunk) ~= "function" then
+				local firstLine = source:sub(1, 60):gsub("%s+", " ")
+				error("the executor couldn't compile it: " .. tostring(compileErr)
+					.. " | file starts with: " .. firstLine, 0)
+			end
+			stage = "running"
 			chunk({
 				player = player,
 				screenGui = screenGui,
@@ -2241,7 +2251,9 @@ do
 		end)
 		loading = false
 		if not ok then
-			return false, "Aetherfinix Linux failed to load: " .. tostring(err)
+			local reason = tostring(err)
+			if reason == "" or reason == "nil" then reason = "(no error text from the executor)" end
+			return false, "Aetherfinix Linux failed to load while " .. stage .. ": " .. reason
 		end
 		loaded = true
 		return true
