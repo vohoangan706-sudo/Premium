@@ -469,7 +469,7 @@ local function setupLuaOS()
 		local count = select("#", ...)
 		if count == 0 then return 0 end
 		local total = 0
-		for i = 1, count do total += select(i, ...) end
+		for i = 1, count do total = total + select(i, ...) end
 		return total / count
 	end
 
@@ -487,7 +487,7 @@ local function setupLuaOS()
 		n = math.floor(n)
 		assert(n >= 0 and n <= 170, "mathx.factorial: n must be 0-170")
 		local result = 1
-		for i = 2, n do result *= i end
+		for i = 2, n do result = result * i end
 		return result
 	end
 
@@ -609,7 +609,7 @@ local function setupLuaOS()
 
 		function eventLib.connect(name, fn)
 			assert(type(fn) == "function", "event.connect: callback must be a function")
-			nextId += 1
+			nextId = nextId + 1
 			name = tostring(name)
 			handlers[name] = handlers[name] or {}
 			table.insert(handlers[name], { id = nextId, fn = fn })
@@ -666,7 +666,7 @@ local function setupLuaOS()
 
 		local function runningCount()
 			local count = 0
-			for _ in pairs(running) do count += 1 end
+			for _ in pairs(running) do count = count + 1 end
 			return count
 		end
 
@@ -797,7 +797,7 @@ local function setupLuaOS()
 				realTask.spawn(function()
 					local t = 0
 					while pulseOn and booted do
-						t += RunService.Heartbeat:Wait()
+						t = t + RunService.Heartbeat:Wait()
 						if glowStroke and glowStroke.Parent then
 							glowStroke.Thickness = base + 1.5 * (math.sin(t * 4) + 1) / 2
 						end
