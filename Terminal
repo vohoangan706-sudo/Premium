@@ -111,7 +111,7 @@ end
 -------------------------------------------------
 
 -- Bump this number every time something new is added to the panel.
-local PANEL_TITLE = "Aetherfinix v1.16"
+local PANEL_TITLE = "Aetherfinix v1.17"
 
 local screenGui = Instance.new("ScreenGui")
 screenGui.Name = "TerminalPanelPremium"
