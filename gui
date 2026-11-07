@@ -1264,9 +1264,20 @@ local function setupGuiBuilder()
 		return "Installing guibuilder..."
 	end
 
+	-- keeps your saved project; only removes the install
+	local function uninstallGuiBuilder()
+		if not settings.installed then
+			return "GuiBuilder isn't installed."
+		end
+		closeGuiBuilder()
+		settings.installed = nil
+		saveSettings()
+		return "GuiBuilder uninstalled. (Your saved project is kept.)"
+	end
+
 	-- the panel owns the `pkg` command and hands `pkg install guibuilder` to us
 	if registerPackage then
-		registerPackage("guibuilder", installGuiBuilder)
+		registerPackage("guibuilder", installGuiBuilder, function() return uninstallGuiBuilder() end)
 	else
 		commands["pkg"] = function(args)
 			if tostring(args[1] or ""):lower() == "install" and tostring(args[2] or ""):lower() == "guibuilder" then
