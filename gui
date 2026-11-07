@@ -1,0 +1,1280 @@
+-- ======================================================================
+--  GuiBuilder  (standalone package for the Aetherfinix panel)
+--  Host this file (raw URL) and put the URL in the panel's
+--  PACKAGE_URLS.guibuilder slot. Then type:  pkg install guibuilder
+--  Running this file by itself does nothing: the panel loads it.
+-- ======================================================================
+local context = ...
+if type(context) ~= "table" then
+	warn("GuiBuilder must be loaded by the Aetherfinix panel.")
+	return
+end
+
+local player = context.player
+local addLine = context.addLine
+local commands = context.commands
+local registerPackage = context.registerPackage
+
+local HttpService = game:GetService("HttpService")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local realTask = task
+
+local AMBER = Color3.fromRGB(255, 200, 0)
+local GREEN = Color3.fromRGB(150, 255, 150)
+local RED = Color3.fromRGB(255, 150, 150)
+
+local function emit(text, color)
+	addLine(tostring(text), color or AMBER)
+end
+
+-- the saved project (Save / Open) lives in its own small file
+local SETTINGS_FILE = "AetherfinixGuiBuilder.json"
+local settings = {}
+local canPersist = (type(writefile) == "function" and type(readfile) == "function")
+
+if canPersist then
+	local ok, raw = pcall(function()
+		if type(isfile) == "function" and not isfile(SETTINGS_FILE) then return nil end
+		return readfile(SETTINGS_FILE)
+	end)
+	if ok and type(raw) == "string" and raw ~= "" then
+		local decoded, data = pcall(HttpService.JSONDecode, HttpService, raw)
+		if decoded and type(data) == "table" then settings = data end
+	end
+end
+
+local function saveSettings()
+	if not canPersist then return end
+	pcall(function() writefile(SETTINGS_FILE, HttpService:JSONEncode(settings)) end)
+end
+
+local openGuiBuilder
+
+local function setupGuiBuilder()
+	---------------------------------------------------------------
+	-- GuiBuilder  (`pkg install guibuilder`)
+	-- A small visual GUI editor: add elements, edit properties, then
+	-- Export turns the design into LocalScript code.
+	---------------------------------------------------------------
+	local activeBuilder = nil
+
+	local function createGuiBuilder()
+		local PlayerGui = player:WaitForChild("PlayerGui")
+		local connections = {}
+		local alive = true
+
+		local BG = Color3.fromRGB(14, 14, 14)
+		local PANEL = Color3.fromRGB(22, 20, 12)
+		local EDGE = Color3.fromRGB(255, 200, 0)
+		local TEXT = Color3.fromRGB(240, 235, 215)
+		local DIM = Color3.fromRGB(150, 140, 110)
+		local FIELD = Color3.fromRGB(38, 33, 16)
+		local FIELD_ON = Color3.fromRGB(120, 90, 0)
+
+		local function connect(signal, fn)
+			local connection = signal:Connect(fn)
+			table.insert(connections, connection)
+			return connection
+		end
+
+		local function make(class, props, parent)
+			local inst = Instance.new(class)
+			for key, value in pairs(props) do
+				inst[key] = value
+			end
+			inst.Parent = parent
+			return inst
+		end
+
+		local function round(inst, radius)
+			make("UICorner", { CornerRadius = UDim.new(0, radius or 4) }, inst)
+		end
+
+		local function makeButton(parent, text, props)
+			props = props or {}
+			local b = make("TextButton", {
+				Size = props.Size or UDim2.new(0, 0, 0, 28),
+				AutomaticSize = props.AutomaticSize or Enum.AutomaticSize.X,
+				BackgroundColor3 = props.Color or FIELD,
+				TextColor3 = TEXT,
+				Font = Enum.Font.Code,
+				TextSize = props.TextSize or 13,
+				Text = text,
+				BorderSizePixel = 0,
+				LayoutOrder = props.LayoutOrder or 0,
+			}, parent)
+			round(b, 5)
+			make("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, b)
+			return b
+		end
+
+		local function makeBox(parent, size, position, text)
+			local box = make("TextBox", {
+				Size = size, Position = position, BackgroundColor3 = FIELD,
+				TextColor3 = TEXT, PlaceholderColor3 = DIM, Font = Enum.Font.Code,
+				TextSize = 13, ClearTextOnFocus = false, Text = text or "",
+				TextXAlignment = Enum.TextXAlignment.Left, BorderSizePixel = 0,
+			}, parent)
+			round(box, 4)
+			make("UIPadding", { PaddingLeft = UDim.new(0, 6) }, box)
+			return box
+		end
+
+		local function makeLabel(parent, text, size, position, color, textSize)
+			return make("TextLabel", {
+				Size = size, Position = position, BackgroundTransparency = 1,
+				Text = text, TextColor3 = color or TEXT, Font = Enum.Font.Code,
+				TextSize = textSize or 13, TextXAlignment = Enum.TextXAlignment.Left,
+				TextTruncate = Enum.TextTruncate.AtEnd,
+			}, parent)
+		end
+
+		local function makePanel(parent, size, position)
+			local frame = make("Frame", {
+				Size = size, Position = position, BackgroundColor3 = PANEL, BorderSizePixel = 0,
+			}, parent)
+			round(frame, 6)
+			make("UIStroke", { Color = EDGE, Thickness = 1, Transparency = 0.35 }, frame)
+			return frame
+		end
+
+		---------------------------------------------------------
+		-- property tables
+		---------------------------------------------------------
+		local FONTS = { "Code", "Gotham", "GothamBold", "SourceSans", "SourceSansBold", "Arial", "ArialBold", "Cartoon", "Fantasy", "Highway", "SciFi" }
+		local FILL_DIRECTIONS = { "Horizontal", "Vertical" }
+
+		local function P(name, kind, extra)
+			local entry = { name = name, type = kind }
+			if extra then
+				for key, value in pairs(extra) do entry[key] = value end
+			end
+			return entry
+		end
+
+		local function concat(...)
+			local out = {}
+			for _, list in ipairs({ ... }) do
+				for _, item in ipairs(list) do table.insert(out, item) end
+			end
+			return out
+		end
+
+		local GUI_COMMON = {
+			P("Size", "udim2"), P("Position", "udim2"), P("AnchorPoint", "vector2"),
+			P("Visible", "bool"), P("BackgroundColor3", "color"), P("BackgroundTransparency", "number"),
+			P("BorderSizePixel", "number"), P("BorderColor3", "color"), P("ZIndex", "number"),
+		}
+		local TEXT_PROPS = {
+			P("Text", "string"), P("TextColor3", "color"), P("TextSize", "number"),
+			P("TextTransparency", "number"), P("Font", "enum", { enumName = "Font", list = FONTS }),
+		}
+		local IMAGE_PROPS = {
+			P("Image", "string"), P("ImageColor3", "color"), P("ImageTransparency", "number"),
+		}
+
+		local PROPS = {
+			Frame = GUI_COMMON,
+			TextLabel = concat(GUI_COMMON, TEXT_PROPS),
+			TextButton = concat(GUI_COMMON, TEXT_PROPS),
+			TextBox = concat(GUI_COMMON, TEXT_PROPS),
+			ImageLabel = concat(GUI_COMMON, IMAGE_PROPS),
+			ImageButton = concat(GUI_COMMON, IMAGE_PROPS),
+			ScrollingFrame = concat(GUI_COMMON, { P("ScrollBarThickness", "number"), P("CanvasSize", "udim2") }),
+			ViewportFrame = GUI_COMMON,
+			UICorner = { P("CornerRadius", "udim") },
+			UIPadding = { P("PaddingTop", "udim"), P("PaddingBottom", "udim"), P("PaddingLeft", "udim"), P("PaddingRight", "udim") },
+			UIScale = { P("Scale", "number") },
+			UIStroke = { P("Color", "color"), P("Thickness", "number"), P("Transparency", "number") },
+			UIGradient = {
+				P("Color1", "color", {
+					virtual = true,
+					get = function(inst) return inst.Color.Keypoints[1].Value end,
+					set = function(inst, c)
+						local keys = inst.Color.Keypoints
+						inst.Color = ColorSequence.new(c, keys[#keys].Value)
+					end,
+				}),
+				P("Color2", "color", {
+					virtual = true,
+					get = function(inst)
+						local keys = inst.Color.Keypoints
+						return keys[#keys].Value
+					end,
+					set = function(inst, c) inst.Color = ColorSequence.new(inst.Color.Keypoints[1].Value, c) end,
+				}),
+				P("Rotation", "number"),
+			},
+			UIListLayout = { P("Padding", "udim"), P("FillDirection", "enum", { enumName = "FillDirection", list = FILL_DIRECTIONS }) },
+			UIGridLayout = { P("CellSize", "udim2"), P("CellPadding", "udim2") },
+			UIAspectRatioConstraint = { P("AspectRatio", "number") },
+		}
+
+		local function getProp(inst, p)
+			if p.get then return p.get(inst) end
+			return inst[p.name]
+		end
+
+		local function setProp(inst, p, value)
+			if p.set then p.set(inst, value) else inst[p.name] = value end
+		end
+
+		local function fmtNum(n)
+			if math.abs(n - math.floor(n + 0.5)) < 0.0001 then
+				return tostring(math.floor(n + 0.5))
+			end
+			local s = string.format("%.3f", n)
+			s = s:gsub("0+$", "")
+			s = s:gsub("%.$", "")
+			return s
+		end
+
+		local function to255(x) return math.floor(x * 255 + 0.5) end
+
+		local function fmtValue(p, v)
+			local kind = p.type
+			if kind == "udim2" then
+				return "{" .. fmtNum(v.X.Scale) .. ", " .. fmtNum(v.X.Offset) .. "}, {" .. fmtNum(v.Y.Scale) .. ", " .. fmtNum(v.Y.Offset) .. "}"
+			elseif kind == "vector2" then
+				return "{" .. fmtNum(v.X) .. ", " .. fmtNum(v.Y) .. "}"
+			elseif kind == "udim" then
+				return "{" .. fmtNum(v.Scale) .. ", " .. fmtNum(v.Offset) .. "}"
+			elseif kind == "color" then
+				return "rgb(" .. to255(v.R) .. ", " .. to255(v.G) .. ", " .. to255(v.B) .. ")"
+			elseif kind == "enum" then
+				return v.Name
+			elseif kind == "number" then
+				return fmtNum(v)
+			end
+			return tostring(v)
+		end
+
+		local function numbersIn(text)
+			local out = {}
+			for piece in tostring(text):gmatch("-?%d*%.?%d+") do
+				table.insert(out, tonumber(piece))
+			end
+			return out
+		end
+
+		-- turns what you typed into a value; nil means "not valid"
+		local function parseValue(p, text)
+			local kind = p.type
+			if kind == "number" then return tonumber(text) end
+			if kind == "string" then return text end
+			local nums = numbersIn(text)
+			if kind == "udim2" and #nums == 4 then return UDim2.new(nums[1], nums[2], nums[3], nums[4]) end
+			if kind == "vector2" and #nums == 2 then return Vector2.new(nums[1], nums[2]) end
+			if kind == "udim" and #nums == 2 then return UDim.new(nums[1], nums[2]) end
+			return nil
+		end
+
+		local function toData(p, v)
+			local kind = p.type
+			if kind == "udim2" then return { v.X.Scale, v.X.Offset, v.Y.Scale, v.Y.Offset } end
+			if kind == "vector2" then return { v.X, v.Y } end
+			if kind == "udim" then return { v.Scale, v.Offset } end
+			if kind == "color" then return { to255(v.R), to255(v.G), to255(v.B) } end
+			if kind == "enum" then return v.Name end
+			return v
+		end
+
+		local function fromData(p, d)
+			local kind = p.type
+			if kind == "udim2" then return UDim2.new(d[1], d[2], d[3], d[4]) end
+			if kind == "vector2" then return Vector2.new(d[1], d[2]) end
+			if kind == "udim" then return UDim.new(d[1], d[2]) end
+			if kind == "color" then return Color3.fromRGB(d[1], d[2], d[3]) end
+			if kind == "enum" then return Enum[p.enumName][d] end
+			return d
+		end
+
+		---------------------------------------------------------
+		-- main window
+		---------------------------------------------------------
+		local gui = make("ScreenGui", { Name = "AetherGuiBuilder", ResetOnSpawn = false, DisplayOrder = 100 }, PlayerGui)
+
+		local main = make("Frame", {
+			Name = "Main", Size = UDim2.new(1, -12, 1, -12), Position = UDim2.new(0, 6, 0, 6),
+			BackgroundColor3 = BG, BorderSizePixel = 0, Active = true,
+		}, gui)
+		round(main, 8)
+		make("UIStroke", { Color = EDGE, Thickness = 1.5 }, main)
+
+		local chip = makeButton(gui, "GuiBuilder", { Size = UDim2.new(0, 150, 0, 26), AutomaticSize = Enum.AutomaticSize.None, Color = FIELD_ON })
+		chip.Position = UDim2.new(0.5, -75, 0, 4)
+		chip.Visible = false
+		local chipMode = "min"
+
+		local topBar = make("Frame", { Size = UDim2.new(1, -12, 0, 34), Position = UDim2.new(0, 6, 0, 6), BackgroundTransparency = 1 }, main)
+		local leftBar = make("ScrollingFrame", {
+			Size = UDim2.new(1, -150, 1, 0), BackgroundTransparency = 1, BorderSizePixel = 0,
+			ScrollBarThickness = 0, CanvasSize = UDim2.new(0, 0, 0, 0),
+			AutomaticCanvasSize = Enum.AutomaticSize.X, ScrollingDirection = Enum.ScrollingDirection.X,
+		}, topBar)
+		make("UIListLayout", {
+			FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4),
+			VerticalAlignment = Enum.VerticalAlignment.Center, SortOrder = Enum.SortOrder.LayoutOrder,
+		}, leftBar)
+
+		local newButton = makeButton(leftBar, "New", { LayoutOrder = 1 })
+		local openButton = makeButton(leftBar, "Open", { LayoutOrder = 2 })
+		local saveButton = makeButton(leftBar, "Save", { LayoutOrder = 3 })
+		local exportButton = makeButton(leftBar, "Export", { LayoutOrder = 4 })
+		local selectTool = makeButton(leftBar, "Select", { LayoutOrder = 6 })
+		local moveTool = makeButton(leftBar, "Move", { LayoutOrder = 7 })
+		local resizeTool = makeButton(leftBar, "Resize", { LayoutOrder = 8 })
+		local undoButton = makeButton(leftBar, "Undo", { LayoutOrder = 10 })
+		local redoButton = makeButton(leftBar, "Redo", { LayoutOrder = 11 })
+
+		local rightBar = make("Frame", { Size = UDim2.new(0, 146, 1, 0), Position = UDim2.new(1, -146, 0, 0), BackgroundTransparency = 1 }, topBar)
+		local testButton = makeButton(rightBar, "Test (F5)", { Size = UDim2.new(0, 84, 0, 28), AutomaticSize = Enum.AutomaticSize.None, Color = FIELD_ON })
+		testButton.Position = UDim2.new(0, 0, 0.5, -14)
+		local minButton = makeButton(rightBar, "-", { Size = UDim2.new(0, 28, 0, 28), AutomaticSize = Enum.AutomaticSize.None })
+		minButton.Position = UDim2.new(0, 88, 0.5, -14)
+		local closeButton = makeButton(rightBar, "X", { Size = UDim2.new(0, 28, 0, 28), AutomaticSize = Enum.AutomaticSize.None, Color = Color3.fromRGB(110, 35, 10) })
+		closeButton.Position = UDim2.new(0, 118, 0.5, -14)
+
+		local body = make("Frame", { Size = UDim2.new(1, -12, 1, -52), Position = UDim2.new(0, 6, 0, 46), BackgroundTransparency = 1 }, main)
+
+		---------------------------------------------------------
+		-- left: elements
+		---------------------------------------------------------
+		local elementsPanel = makePanel(body, UDim2.new(0.2, -3, 1, 0), UDim2.new(0, 0, 0, 0))
+		makeLabel(elementsPanel, "Elements", UDim2.new(1, -12, 0, 22), UDim2.new(0, 8, 0, 4), EDGE, 14)
+		local searchBox = makeBox(elementsPanel, UDim2.new(1, -12, 0, 24), UDim2.new(0, 6, 0, 28), "")
+		searchBox.PlaceholderText = "Search elements..."
+		local elementList = make("ScrollingFrame", {
+			Size = UDim2.new(1, -8, 1, -60), Position = UDim2.new(0, 4, 0, 56), BackgroundTransparency = 1,
+			BorderSizePixel = 0, ScrollBarThickness = 3, CanvasSize = UDim2.new(0, 0, 0, 0),
+			AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		}, elementsPanel)
+		make("UIListLayout", { Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder }, elementList)
+
+		---------------------------------------------------------
+		-- middle: canvas
+		---------------------------------------------------------
+		local canvasFrame = make("Frame", {
+			Size = UDim2.new(0.5, -3, 1, 0), Position = UDim2.new(0.2, 0, 0, 0),
+			BackgroundColor3 = Color3.fromRGB(18, 18, 18), BorderSizePixel = 0,
+			ClipsDescendants = true, Active = true,
+		}, body)
+		round(canvasFrame, 6)
+		make("UIStroke", { Color = EDGE, Thickness = 1, Transparency = 0.6 }, canvasFrame)
+
+		local designRoot = make("Frame", { Name = "DesignRoot", Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, ZIndex = 1 }, canvasFrame)
+		local statusLabel = makeLabel(canvasFrame, "Add an element from the left.", UDim2.new(1, -12, 0, 18), UDim2.new(0, 8, 1, -22), DIM, 12)
+		statusLabel.ZIndex = 60
+
+		local selBox = make("Frame", { BackgroundTransparency = 1, ZIndex = 50, Visible = false }, canvasFrame)
+		make("UIStroke", { Color = EDGE, Thickness = 2 }, selBox)
+		local selTag = make("TextLabel", {
+			Size = UDim2.new(0, 0, 0, 16), AutomaticSize = Enum.AutomaticSize.X, Position = UDim2.new(0, 0, 0, -18),
+			BackgroundColor3 = EDGE, TextColor3 = Color3.fromRGB(20, 20, 20), Font = Enum.Font.Code,
+			TextSize = 12, Text = "", ZIndex = 52, BorderSizePixel = 0,
+		}, selBox)
+		make("UIPadding", { PaddingLeft = UDim.new(0, 5), PaddingRight = UDim.new(0, 5) }, selTag)
+		round(selTag, 4)
+
+		---------------------------------------------------------
+		-- right: properties + colour editor
+		---------------------------------------------------------
+		local propsPanel = makePanel(body, UDim2.new(0.3, 0, 1, -118), UDim2.new(0.7, 0, 0, 0))
+		local propsHeader = makeLabel(propsPanel, "Properties", UDim2.new(1, -90, 0, 22), UDim2.new(0, 8, 0, 4), EDGE, 14)
+		local delButton = makeButton(propsPanel, "Del", { Size = UDim2.new(0, 34, 0, 20), AutomaticSize = Enum.AutomaticSize.None, Color = Color3.fromRGB(110, 35, 10), TextSize = 12 })
+		delButton.Position = UDim2.new(1, -40, 0, 4)
+		local upButton = makeButton(propsPanel, "Up", { Size = UDim2.new(0, 30, 0, 20), AutomaticSize = Enum.AutomaticSize.None, TextSize = 12 })
+		upButton.Position = UDim2.new(1, -74, 0, 4)
+		local propsList = make("ScrollingFrame", {
+			Size = UDim2.new(1, -8, 1, -30), Position = UDim2.new(0, 4, 0, 28), BackgroundTransparency = 1,
+			BorderSizePixel = 0, ScrollBarThickness = 3, CanvasSize = UDim2.new(0, 0, 0, 0),
+			AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		}, propsPanel)
+		make("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder }, propsList)
+
+		local colorPanel = makePanel(body, UDim2.new(0.3, 0, 0, 114), UDim2.new(0.7, 0, 1, -114))
+		makeLabel(colorPanel, "Color Editor", UDim2.new(1, -12, 0, 18), UDim2.new(0, 8, 0, 3), EDGE, 13)
+		local hexBox = makeBox(colorPanel, UDim2.new(1, -12, 0, 24), UDim2.new(0, 6, 0, 22), "#FFFFFF")
+		local rBox = makeBox(colorPanel, UDim2.new(0.333, -6, 0, 24), UDim2.new(0, 6, 0, 50), "255")
+		local gBox = makeBox(colorPanel, UDim2.new(0.333, -4, 0, 24), UDim2.new(0.333, 0, 0, 50), "255")
+		local bBox = makeBox(colorPanel, UDim2.new(0.333, -6, 0, 24), UDim2.new(0.667, 0, 0, 50), "255")
+		local swatchRow = make("Frame", { Size = UDim2.new(1, -12, 0, 24), Position = UDim2.new(0, 6, 0, 82), BackgroundTransparency = 1 }, colorPanel)
+		make("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4) }, swatchRow)
+
+		---------------------------------------------------------
+		-- state
+		---------------------------------------------------------
+		local selected = nil
+		local colorTarget = nil
+		local tool = "Move"
+		local drag = nil
+		local placed = 0
+		local history, historyIndex = {}, 0
+		local refreshProps
+
+		local function setStatus(text, color)
+			statusLabel.Text = text
+			statusLabel.TextColor3 = color or DIM
+		end
+
+		local function prepare(inst)
+			if inst:IsA("GuiObject") then inst.Active = true end
+			if inst:IsA("TextBox") then inst.TextEditable = false end
+			if inst:IsA("ScrollingFrame") then inst.ScrollingEnabled = false end
+		end
+
+		local function isDesignObject(inst)
+			return inst ~= nil and inst:IsDescendantOf(designRoot) and PROPS[inst.ClassName] ~= nil
+		end
+
+		---------------------------------------------------------
+		-- save / history
+		---------------------------------------------------------
+		local function serializeNode(inst)
+			local data = {}
+			for _, p in ipairs(PROPS[inst.ClassName]) do
+				data[p.name] = toData(p, getProp(inst, p))
+			end
+			local kids = {}
+			for _, child in ipairs(inst:GetChildren()) do
+				if PROPS[child.ClassName] then table.insert(kids, serializeNode(child)) end
+			end
+			return { c = inst.ClassName, n = inst.Name, p = data, k = kids }
+		end
+
+		local function snapshot()
+			local list = {}
+			for _, child in ipairs(designRoot:GetChildren()) do
+				if PROPS[child.ClassName] then table.insert(list, serializeNode(child)) end
+			end
+			return HttpService:JSONEncode(list)
+		end
+
+		local function pushHistory()
+			local snap = snapshot()
+			if history[historyIndex] == snap then return end
+			for i = #history, historyIndex + 1, -1 do history[i] = nil end
+			table.insert(history, snap)
+			if #history > 60 then table.remove(history, 1) end
+			historyIndex = #history
+		end
+
+		local hook -- defined below
+
+		local function buildNode(node, parent)
+			if type(node) ~= "table" or not PROPS[node.c] then return nil end
+			local okNew, inst = pcall(Instance.new, node.c)
+			if not okNew then return nil end
+			inst.Name = tostring(node.n or node.c)
+			for _, p in ipairs(PROPS[node.c]) do
+				local d = node.p and node.p[p.name]
+				if d ~= nil then pcall(function() setProp(inst, p, fromData(p, d)) end) end
+			end
+			prepare(inst)
+			inst.Parent = parent
+			if inst:IsA("GuiObject") then hook(inst) end
+			for _, childNode in ipairs(node.k or {}) do buildNode(childNode, inst) end
+			return inst
+		end
+
+		local function loadSnapshot(snap)
+			selected = nil
+			colorTarget = nil
+			for _, child in ipairs(designRoot:GetChildren()) do child:Destroy() end
+			local ok, list = pcall(HttpService.JSONDecode, HttpService, snap)
+			if ok and type(list) == "table" then
+				for _, node in ipairs(list) do buildNode(node, designRoot) end
+			end
+			refreshProps()
+		end
+
+		---------------------------------------------------------
+		-- colour editor
+		---------------------------------------------------------
+		local function loadColorEditor()
+			local c = Color3.fromRGB(255, 255, 255)
+			if colorTarget and colorTarget.inst.Parent then
+				c = getProp(colorTarget.inst, colorTarget.prop)
+			end
+			local r, g, b = to255(c.R), to255(c.G), to255(c.B)
+			hexBox.Text = string.format("#%02X%02X%02X", r, g, b)
+			rBox.Text, gBox.Text, bBox.Text = tostring(r), tostring(g), tostring(b)
+		end
+
+		local function applyColor(c)
+			if not (colorTarget and colorTarget.inst.Parent) then
+				setStatus("Pick a color property first (click a color row).")
+				return
+			end
+			setProp(colorTarget.inst, colorTarget.prop, c)
+			pushHistory()
+			loadColorEditor()
+			refreshProps()
+		end
+
+		connect(hexBox.FocusLost, function()
+			local ok, c = pcall(Color3.fromHex, hexBox.Text)
+			if ok and c then applyColor(c) else loadColorEditor() end
+		end)
+
+		local function rgbFocusLost()
+			local r, g, b = tonumber(rBox.Text), tonumber(gBox.Text), tonumber(bBox.Text)
+			if r and g and b then
+				applyColor(Color3.fromRGB(math.clamp(r, 0, 255), math.clamp(g, 0, 255), math.clamp(b, 0, 255)))
+			else
+				loadColorEditor()
+			end
+		end
+		connect(rBox.FocusLost, rgbFocusLost)
+		connect(gBox.FocusLost, rgbFocusLost)
+		connect(bBox.FocusLost, rgbFocusLost)
+
+		local SWATCHES = {
+			Color3.fromRGB(0, 0, 0), Color3.fromRGB(128, 128, 128), Color3.fromRGB(255, 255, 255),
+			Color3.fromRGB(255, 217, 0), Color3.fromRGB(255, 235, 160), Color3.fromRGB(60, 120, 255),
+			Color3.fromRGB(235, 70, 70), Color3.fromRGB(80, 200, 120),
+		}
+		for _, swatchColor in ipairs(SWATCHES) do
+			local swatch = make("TextButton", {
+				Size = UDim2.new(0, 22, 0, 22), Text = "", BackgroundColor3 = swatchColor,
+				BorderSizePixel = 0, AutoButtonColor = false,
+			}, swatchRow)
+			round(swatch, 4)
+			connect(swatch.MouseButton1Click, function() applyColor(swatchColor) end)
+		end
+
+		---------------------------------------------------------
+		-- selection
+		---------------------------------------------------------
+		local function selectInst(inst)
+			selected = inst
+			colorTarget = nil
+			if inst then
+				for _, p in ipairs(PROPS[inst.ClassName]) do
+					if p.type == "color" then
+						colorTarget = { inst = inst, prop = p }
+						break
+					end
+				end
+			end
+			loadColorEditor()
+			refreshProps()
+		end
+
+		---------------------------------------------------------
+		-- properties panel
+		---------------------------------------------------------
+		refreshProps = function()
+			for _, child in ipairs(propsList:GetChildren()) do
+				if not child:IsA("UIListLayout") then child:Destroy() end
+			end
+			if not selected or not selected.Parent then
+				selected = nil
+				propsHeader.Text = "Properties"
+				makeLabel(propsList, "Nothing selected.", UDim2.new(1, -6, 0, 24), UDim2.new(0, 4, 0, 0), DIM, 12)
+				return
+			end
+
+			propsHeader.Text = selected.ClassName
+			local order = 0
+			local function newRow(labelText)
+				order = order + 1
+				local row = make("Frame", { Size = UDim2.new(1, -6, 0, 26), BackgroundTransparency = 1, LayoutOrder = order }, propsList)
+				makeLabel(row, labelText, UDim2.new(0.45, -2, 1, 0), UDim2.new(0, 2, 0, 0), TEXT, 12)
+				return row
+			end
+			local function controlBox(row, text)
+				return makeBox(row, UDim2.new(0.55, -2, 1, -2), UDim2.new(0.45, 0, 0, 1), text)
+			end
+
+			-- name
+			local nameRow = newRow("Name")
+			local nameBox = controlBox(nameRow, selected.Name)
+			local target = selected
+			connect(nameBox.FocusLost, function()
+				if target.Parent and nameBox.Text ~= "" then
+					target.Name = nameBox.Text
+					pushHistory()
+					refreshProps()
+				end
+			end)
+
+			for _, p in ipairs(PROPS[selected.ClassName]) do
+				local inst = selected
+				local value = getProp(inst, p)
+				local row = newRow(p.name)
+				if p.type == "bool" then
+					local toggle = makeButton(row, tostring(value), { Size = UDim2.new(0.55, -2, 1, -2), AutomaticSize = Enum.AutomaticSize.None, TextSize = 12, Color = value and FIELD_ON or FIELD })
+					toggle.Position = UDim2.new(0.45, 0, 0, 1)
+					connect(toggle.MouseButton1Click, function()
+						setProp(inst, p, not getProp(inst, p))
+						pushHistory()
+						refreshProps()
+					end)
+				elseif p.type == "enum" then
+					local cycle = makeButton(row, value.Name, { Size = UDim2.new(0.55, -2, 1, -2), AutomaticSize = Enum.AutomaticSize.None, TextSize = 12 })
+					cycle.Position = UDim2.new(0.45, 0, 0, 1)
+					connect(cycle.MouseButton1Click, function()
+						local index = table.find(p.list, getProp(inst, p).Name) or 0
+						index = index % #p.list + 1
+						setProp(inst, p, Enum[p.enumName][p.list[index]])
+						pushHistory()
+						refreshProps()
+					end)
+				elseif p.type == "color" then
+					local chosen = colorTarget and colorTarget.inst == inst and colorTarget.prop == p
+					local swatch = make("TextButton", {
+						Text = "", Size = UDim2.new(0, 24, 0, 20), Position = UDim2.new(0.45, 0, 0.5, -10),
+						BackgroundColor3 = value, BorderSizePixel = 0, AutoButtonColor = false,
+					}, row)
+					round(swatch, 4)
+					if chosen then make("UIStroke", { Color = EDGE, Thickness = 2 }, swatch) end
+					local text = make("TextButton", {
+						Text = fmtValue(p, value), Size = UDim2.new(0.55, -30, 1, -2), Position = UDim2.new(0.45, 28, 0, 1),
+						BackgroundTransparency = 1, TextColor3 = TEXT, Font = Enum.Font.Code, TextSize = 11,
+						TextXAlignment = Enum.TextXAlignment.Left,
+					}, row)
+					local function pick()
+						colorTarget = { inst = inst, prop = p }
+						loadColorEditor()
+						refreshProps()
+					end
+					connect(swatch.MouseButton1Click, pick)
+					connect(text.MouseButton1Click, pick)
+				else
+					local box = controlBox(row, fmtValue(p, value))
+					connect(box.FocusLost, function()
+						if not inst.Parent then return end
+						local parsed = parseValue(p, box.Text)
+						if parsed ~= nil then
+							local ok = pcall(setProp, inst, p, parsed)
+							if ok then pushHistory() end
+						end
+						refreshProps()
+					end)
+				end
+			end
+
+			-- children
+			local kids = {}
+			for _, child in ipairs(selected:GetChildren()) do
+				if PROPS[child.ClassName] then table.insert(kids, child) end
+			end
+			if #kids > 0 then
+				local header = newRow("Children (" .. #kids .. ")")
+				header.Size = UDim2.new(1, -6, 0, 22)
+				for _, child in ipairs(kids) do
+					order = order + 1
+					local childButton = makeButton(propsList, child.ClassName .. "  " .. child.Name, {
+						Size = UDim2.new(1, -6, 0, 22), AutomaticSize = Enum.AutomaticSize.None, TextSize = 12, LayoutOrder = order,
+					})
+					childButton.TextXAlignment = Enum.TextXAlignment.Left
+					connect(childButton.MouseButton1Click, function() selectInst(child) end)
+				end
+			end
+		end
+
+		connect(upButton.MouseButton1Click, function()
+			if selected and selected.Parent and selected.Parent ~= designRoot then
+				selectInst(selected.Parent)
+			end
+		end)
+
+		connect(delButton.MouseButton1Click, function()
+			if selected and selected.Parent then
+				selected:Destroy()
+				selected = nil
+				colorTarget = nil
+				pushHistory()
+				loadColorEditor()
+				refreshProps()
+				setStatus("Deleted.")
+			end
+		end)
+
+		---------------------------------------------------------
+		-- elements list + adding
+		---------------------------------------------------------
+		local DEFAULTS = {
+			Frame = { Size = UDim2.fromOffset(160, 100), BackgroundColor3 = Color3.fromRGB(255, 217, 0) },
+			TextLabel = { Size = UDim2.fromOffset(160, 30), BackgroundColor3 = Color3.fromRGB(40, 40, 40), Text = "TextLabel", TextColor3 = Color3.fromRGB(255, 255, 255), TextSize = 16 },
+			TextButton = { Size = UDim2.fromOffset(160, 34), BackgroundColor3 = Color3.fromRGB(70, 60, 20), Text = "TextButton", TextColor3 = Color3.fromRGB(255, 217, 0), TextSize = 16 },
+			TextBox = { Size = UDim2.fromOffset(160, 30), BackgroundColor3 = Color3.fromRGB(40, 40, 40), Text = "TextBox", TextColor3 = Color3.fromRGB(255, 255, 255), TextSize = 16 },
+			ImageLabel = { Size = UDim2.fromOffset(100, 100), BackgroundColor3 = Color3.fromRGB(40, 40, 40) },
+			ImageButton = { Size = UDim2.fromOffset(100, 100), BackgroundColor3 = Color3.fromRGB(40, 40, 40) },
+			ScrollingFrame = { Size = UDim2.fromOffset(200, 150), BackgroundColor3 = Color3.fromRGB(30, 30, 30), CanvasSize = UDim2.new(0, 0, 0, 400), ScrollBarThickness = 6 },
+			ViewportFrame = { Size = UDim2.fromOffset(160, 120), BackgroundColor3 = Color3.fromRGB(30, 30, 30) },
+		}
+
+		local function addElement(class)
+			local isModifier = class:sub(1, 2) == "UI"
+			local parent = designRoot
+
+			if isModifier then
+				local target = selected
+				if target and not target:IsA("GuiObject") then target = target.Parent end
+				if not target or not target:IsA("GuiObject") then
+					setStatus("Select an element first, then add " .. class .. ".", Color3.fromRGB(255, 150, 150))
+					return
+				end
+				local existing = target:FindFirstChildOfClass(class)
+				if existing then
+					selectInst(existing)
+					setStatus(target.Name .. " already has a " .. class .. " (selected it).")
+					return
+				end
+				local inst = Instance.new(class)
+				inst.Parent = target
+				pushHistory()
+				selectInst(inst)
+				setStatus("Added " .. class .. " to " .. target.Name .. ".")
+				return
+			end
+
+			if selected and selected.Parent then
+				local target = selected
+				if not target:IsA("GuiObject") then target = target.Parent end
+				if target and (target:IsA("Frame") or target:IsA("ScrollingFrame")) then parent = target end
+			end
+
+			local inst = Instance.new(class)
+			for key, value in pairs(DEFAULTS[class] or {}) do inst[key] = value end
+			inst.BorderSizePixel = 0
+			local step = (placed % 8) * 18
+			if parent == designRoot then
+				inst.Position = UDim2.fromOffset(30 + step, 30 + step)
+			else
+				inst.Position = UDim2.fromOffset(10, 10)
+			end
+			placed = placed + 1
+			prepare(inst)
+			inst.Parent = parent
+			hook(inst)
+			pushHistory()
+			selectInst(inst)
+			setStatus("Added " .. class .. ". Tools: Move to drag, Resize for handles.")
+		end
+
+		local ELEMENT_NAMES = { "Frame", "TextLabel", "TextButton", "ImageLabel", "ImageButton", "ScrollingFrame", "ViewportFrame", "UIListLayout", "UIGridLayout", "UICorner", "UIPadding", "UIScale", "UIStroke", "UIGradient" }
+		local EXTRA_NAMES = { "TextBox", "UIAspectRatioConstraint" }
+		local elementRows = {}
+		local showExtra = false
+
+		local function applyFilter()
+			local query = searchBox.Text:lower()
+			for _, entry in ipairs(elementRows) do
+				local matches = query == "" or entry.name:lower():find(query, 1, true) ~= nil
+				entry.row.Visible = matches and (not entry.extra or showExtra or query ~= "")
+			end
+		end
+
+		for index, name in ipairs(concat(ELEMENT_NAMES, EXTRA_NAMES)) do
+			local extra = index > #ELEMENT_NAMES
+			local row = makeButton(elementList, name, { Size = UDim2.new(1, -6, 0, 26), AutomaticSize = Enum.AutomaticSize.None, LayoutOrder = index })
+			row.TextXAlignment = Enum.TextXAlignment.Left
+			table.insert(elementRows, { name = name, row = row, extra = extra })
+			connect(row.MouseButton1Click, function() addElement(name) end)
+		end
+		local moreButton = makeButton(elementList, "More...", { Size = UDim2.new(1, -6, 0, 26), AutomaticSize = Enum.AutomaticSize.None, LayoutOrder = 100 })
+		moreButton.TextXAlignment = Enum.TextXAlignment.Left
+		connect(moreButton.MouseButton1Click, function()
+			showExtra = not showExtra
+			moreButton.Text = showExtra and "Less..." or "More..."
+			applyFilter()
+		end)
+		connect(searchBox:GetPropertyChangedSignal("Text"), applyFilter)
+		applyFilter()
+
+		---------------------------------------------------------
+		-- clicking, dragging, resizing on the canvas
+		---------------------------------------------------------
+		local function isPress(input)
+			return input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch
+		end
+
+		hook = function(inst)
+			connect(inst.InputBegan, function(input)
+				if not isPress(input) then return end
+				selectInst(inst)
+				if tool == "Move" then
+					drag = { kind = "move", inst = inst, start = input.Position, pos = inst.Position }
+				end
+			end)
+		end
+
+		connect(canvasFrame.InputBegan, function(input)
+			if isPress(input) and selected then
+				selectInst(nil)
+			end
+		end)
+
+		local HANDLES = {
+			{ 0, 0, -1, -1 }, { 0.5, 0, 0, -1 }, { 1, 0, 1, -1 }, { 0, 0.5, -1, 0 },
+			{ 1, 0.5, 1, 0 }, { 0, 1, -1, 1 }, { 0.5, 1, 0, 1 }, { 1, 1, 1, 1 },
+		}
+		local handleFrames = {}
+		for _, info in ipairs(HANDLES) do
+			local handle = make("Frame", {
+				Size = UDim2.fromOffset(14, 14), Position = UDim2.new(info[1], -7, info[2], -7),
+				BackgroundColor3 = EDGE, BorderSizePixel = 0, ZIndex = 53, Active = true, Visible = false,
+			}, selBox)
+			table.insert(handleFrames, handle)
+			connect(handle.InputBegan, function(input)
+				local inst = selected
+				if inst and not inst:IsA("GuiObject") then inst = inst.Parent end
+				if isPress(input) and inst and inst:IsA("GuiObject") then
+					drag = {
+						kind = "resize", inst = inst, start = input.Position,
+						dir = Vector2.new(info[3], info[4]), pos = inst.Position,
+						abs = inst.AbsoluteSize, anchor = inst.AnchorPoint,
+					}
+				end
+			end)
+		end
+
+		connect(UserInputService.InputChanged, function(input)
+			if not drag or not drag.inst.Parent then return end
+			if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then return end
+			local dx = input.Position.X - drag.start.X
+			local dy = input.Position.Y - drag.start.Y
+			local inst = drag.inst
+			if drag.kind == "move" then
+				inst.Position = UDim2.new(drag.pos.X.Scale, drag.pos.X.Offset + dx, drag.pos.Y.Scale, drag.pos.Y.Offset + dy)
+			else
+				local newW = math.max(4, drag.abs.X + drag.dir.X * dx)
+				local newH = math.max(4, drag.abs.Y + drag.dir.Y * dy)
+				local grewW = newW - drag.abs.X
+				local grewH = newH - drag.abs.Y
+				local px, py = drag.pos.X.Offset, drag.pos.Y.Offset
+				if drag.dir.X == 1 then
+					px = px + drag.anchor.X * grewW
+				elseif drag.dir.X == -1 then
+					px = px - (1 - drag.anchor.X) * grewW
+				end
+				if drag.dir.Y == 1 then
+					py = py + drag.anchor.Y * grewH
+				elseif drag.dir.Y == -1 then
+					py = py - (1 - drag.anchor.Y) * grewH
+				end
+				inst.Size = UDim2.fromOffset(newW, newH)
+				inst.Position = UDim2.new(drag.pos.X.Scale, px, drag.pos.Y.Scale, py)
+			end
+		end)
+
+		connect(UserInputService.InputEnded, function(input)
+			if drag and isPress(input) then
+				drag = nil
+				pushHistory()
+				refreshProps()
+			end
+		end)
+
+		-- keeps the selection outline on top of the selected element
+		connect(RunService.RenderStepped, function()
+			local target = selected
+			if target and not target:IsA("GuiObject") then target = target.Parent end
+			if target and target.Parent and target:IsA("GuiObject") and isDesignObject(target) then
+				local origin = canvasFrame.AbsolutePosition
+				selBox.Position = UDim2.fromOffset(target.AbsolutePosition.X - origin.X, target.AbsolutePosition.Y - origin.Y)
+				selBox.Size = UDim2.fromOffset(target.AbsoluteSize.X, target.AbsoluteSize.Y)
+				selTag.Text = target.ClassName
+				selBox.Visible = true
+				for _, handle in ipairs(handleFrames) do handle.Visible = (tool == "Resize") end
+			else
+				selBox.Visible = false
+			end
+		end)
+
+		---------------------------------------------------------
+		-- tools, undo / redo, new / open / save
+		---------------------------------------------------------
+		local function setTool(name)
+			tool = name
+			selectTool.BackgroundColor3 = (name == "Select") and FIELD_ON or FIELD
+			moveTool.BackgroundColor3 = (name == "Move") and FIELD_ON or FIELD
+			resizeTool.BackgroundColor3 = (name == "Resize") and FIELD_ON or FIELD
+		end
+		setTool("Move")
+		connect(selectTool.MouseButton1Click, function() setTool("Select") end)
+		connect(moveTool.MouseButton1Click, function() setTool("Move") end)
+		connect(resizeTool.MouseButton1Click, function() setTool("Resize") end)
+
+		connect(undoButton.MouseButton1Click, function()
+			if historyIndex > 1 then
+				historyIndex = historyIndex - 1
+				loadSnapshot(history[historyIndex])
+				setStatus("Undo.")
+			end
+		end)
+		connect(redoButton.MouseButton1Click, function()
+			if historyIndex < #history then
+				historyIndex = historyIndex + 1
+				loadSnapshot(history[historyIndex])
+				setStatus("Redo.")
+			end
+		end)
+
+		connect(newButton.MouseButton1Click, function()
+			selected = nil
+			colorTarget = nil
+			for _, child in ipairs(designRoot:GetChildren()) do child:Destroy() end
+			pushHistory()
+			loadColorEditor()
+			refreshProps()
+			setStatus("New project.")
+		end)
+
+		connect(saveButton.MouseButton1Click, function()
+			settings.guiProject = snapshot()
+			saveSettings()
+			setStatus(canPersist and "Project saved." or "Project saved (memory only: this executor can't write files).", GREEN)
+		end)
+
+		connect(openButton.MouseButton1Click, function()
+			if type(settings.guiProject) ~= "string" then
+				setStatus("No saved project yet. Press Save first.", Color3.fromRGB(255, 150, 150))
+				return
+			end
+			loadSnapshot(settings.guiProject)
+			pushHistory()
+			setStatus("Project opened.", GREEN)
+		end)
+
+		---------------------------------------------------------
+		-- export: design -> LocalScript code
+		---------------------------------------------------------
+		local LUA_KEYWORDS = {}
+		for word in ("and break do else elseif end false for function if in local nil not or repeat return then true until while continue export type"):gmatch("%S+") do
+			LUA_KEYWORDS[word] = true
+		end
+
+		local function quote(text)
+			text = tostring(text):gsub("\\", "\\\\"):gsub("\"", "\\\""):gsub("\n", "\\n"):gsub("\r", "")
+			return "\"" .. text .. "\""
+		end
+
+		local function literal(p, v)
+			local kind = p.type
+			if kind == "udim2" then
+				return "UDim2.new(" .. fmtNum(v.X.Scale) .. ", " .. fmtNum(v.X.Offset) .. ", " .. fmtNum(v.Y.Scale) .. ", " .. fmtNum(v.Y.Offset) .. ")"
+			elseif kind == "vector2" then
+				return "Vector2.new(" .. fmtNum(v.X) .. ", " .. fmtNum(v.Y) .. ")"
+			elseif kind == "udim" then
+				return "UDim.new(" .. fmtNum(v.Scale) .. ", " .. fmtNum(v.Offset) .. ")"
+			elseif kind == "color" then
+				return "Color3.fromRGB(" .. to255(v.R) .. ", " .. to255(v.G) .. ", " .. to255(v.B) .. ")"
+			elseif kind == "enum" then
+				return "Enum." .. p.enumName .. "." .. v.Name
+			elseif kind == "string" then
+				return quote(v)
+			elseif kind == "number" then
+				return fmtNum(v)
+			end
+			return tostring(v)
+		end
+
+		local function countDesign()
+			local count = 0
+			for _, inst in ipairs(designRoot:GetDescendants()) do
+				if PROPS[inst.ClassName] then count = count + 1 end
+			end
+			return count
+		end
+
+		local function generateCode()
+			local lines = {}
+			local function add(text) table.insert(lines, text) end
+			local used = { Players = true, player = true, screenGui = true }
+			local defaults = {}
+
+			local function defaultFor(class)
+				if not defaults[class] then defaults[class] = Instance.new(class) end
+				return defaults[class]
+			end
+
+			local function varName(inst)
+				local base = inst.Name:gsub("[^%w_]", "_")
+				if base == "" then base = inst.ClassName end
+				if base:match("^%d") then base = "_" .. base end
+				if LUA_KEYWORDS[base] then base = base .. "_" end
+				local name, n = base, 1
+				while used[name] do
+					n = n + 1
+					name = base .. n
+				end
+				used[name] = true
+				return name
+			end
+
+			local function emitInstance(inst, parentVar)
+				local var = varName(inst)
+				local class = inst.ClassName
+				local default = defaultFor(class)
+				add("local " .. var .. " = Instance.new(\"" .. class .. "\")")
+				add(var .. ".Name = " .. quote(inst.Name))
+				for _, p in ipairs(PROPS[class]) do
+					if not p.virtual then
+						local v = getProp(inst, p)
+						if literal(p, v) ~= literal(p, getProp(default, p)) then
+							add(var .. "." .. p.name .. " = " .. literal(p, v))
+						end
+					end
+				end
+				if class == "UIGradient" then
+					local first, second = PROPS.UIGradient[1], PROPS.UIGradient[2]
+					add(var .. ".Color = ColorSequence.new(" .. literal(first, getProp(inst, first)) .. ", " .. literal(second, getProp(inst, second)) .. ")")
+				end
+				add(var .. ".Parent = " .. parentVar)
+				add("")
+				for _, child in ipairs(inst:GetChildren()) do
+					if PROPS[child.ClassName] then emitInstance(child, var) end
+				end
+			end
+
+			add("-- Generated by Aetherfinix GuiBuilder")
+			add("-- Put this in a LocalScript (for example in StarterPlayerScripts).")
+			add("")
+			add("local Players = game:GetService(\"Players\")")
+			add("local player = Players.LocalPlayer")
+			add("")
+			add("local screenGui = Instance.new(\"ScreenGui\")")
+			add("screenGui.Name = \"GeneratedGui\"")
+			add("screenGui.ResetOnSpawn = false")
+			add("screenGui.Parent = player:WaitForChild(\"PlayerGui\")")
+			add("")
+			for _, child in ipairs(designRoot:GetChildren()) do
+				if PROPS[child.ClassName] then emitInstance(child, "screenGui") end
+			end
+
+			for _, inst in pairs(defaults) do inst:Destroy() end
+			return table.concat(lines, "\n")
+		end
+
+		local codeWindow = nil
+
+		local function showCodeWindow(code)
+			if codeWindow then codeWindow:Destroy() end
+			local lineCount = select(2, code:gsub("\n", "\n")) + 1
+			local window = makePanel(gui, UDim2.new(0.8, 0, 0.8, 0), UDim2.new(0.1, 0, 0.1, 0))
+			window.BackgroundColor3 = Color3.fromRGB(16, 14, 8)
+			window.ZIndex = 200
+			codeWindow = window
+			local title = makeLabel(window, "Exported LocalScript (" .. lineCount .. " lines)", UDim2.new(1, -16, 0, 24), UDim2.new(0, 10, 0, 6), EDGE, 15)
+			title.ZIndex = 201
+
+			local scroll = make("ScrollingFrame", {
+				Size = UDim2.new(1, -16, 1, -84), Position = UDim2.new(0, 8, 0, 34),
+				BackgroundColor3 = Color3.fromRGB(10, 9, 5), BorderSizePixel = 0, ScrollBarThickness = 5,
+				CanvasSize = UDim2.new(0, 0, 0, 0), AutomaticCanvasSize = Enum.AutomaticSize.XY,
+				ScrollingDirection = Enum.ScrollingDirection.XY, ZIndex = 201,
+			}, window)
+			round(scroll, 4)
+			local codeBox = make("TextBox", {
+				Size = UDim2.new(1, 0, 0, 40), AutomaticSize = Enum.AutomaticSize.XY,
+				BackgroundTransparency = 1, TextColor3 = TEXT, Font = Enum.Font.Code, TextSize = 13,
+				TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+				MultiLine = true, TextWrapped = false, ClearTextOnFocus = false, Text = code, ZIndex = 202,
+			}, scroll)
+			make("UIPadding", { PaddingLeft = UDim.new(0, 6), PaddingTop = UDim.new(0, 4) }, codeBox)
+
+			local buttonRow = make("Frame", { Size = UDim2.new(1, -16, 0, 34), Position = UDim2.new(0, 8, 1, -42), BackgroundTransparency = 1, ZIndex = 201 }, window)
+			make("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6), VerticalAlignment = Enum.VerticalAlignment.Center }, buttonRow)
+			local copyButton = makeButton(buttonRow, "Copy", { Color = FIELD_ON })
+			local selectAllButton = makeButton(buttonRow, "Select all")
+			local closeCode = makeButton(buttonRow, "Close")
+			local copyNote = makeLabel(buttonRow, "", UDim2.new(0, 240, 0, 28), UDim2.new(), DIM, 12)
+			for _, b in ipairs({ copyButton, selectAllButton, closeCode, copyNote }) do b.ZIndex = 202 end
+
+			copyButton.MouseButton1Click:Connect(function()
+				if type(setclipboard) == "function" and pcall(setclipboard, code) then
+					copyNote.Text = "Copied to clipboard!"
+					copyNote.TextColor3 = GREEN
+				else
+					copyNote.Text = "No clipboard here: tap Select all, then copy."
+					copyNote.TextColor3 = RED
+				end
+			end)
+			selectAllButton.MouseButton1Click:Connect(function()
+				codeBox:CaptureFocus()
+				codeBox.CursorPosition = #codeBox.Text + 1
+				codeBox.SelectionStart = 1
+			end)
+			closeCode.MouseButton1Click:Connect(function()
+				window:Destroy()
+				if codeWindow == window then codeWindow = nil end
+			end)
+		end
+
+		local exporting = false
+		connect(exportButton.MouseButton1Click, function()
+			if exporting then return end
+			if countDesign() == 0 then
+				setStatus("Nothing to export yet. Add a Frame first.", Color3.fromRGB(255, 150, 150))
+				return
+			end
+			exporting = true
+			exportButton.Text = "Exporting..."
+			realTask.spawn(function()
+				for step = 1, 20 do
+					if not alive then return end
+					setStatus("Exporting... " .. (step * 5) .. "%", EDGE)
+					realTask.wait(0.1)
+				end
+				local ok, result = pcall(generateCode)
+				exporting = false
+				exportButton.Text = "Export"
+				if not alive then return end
+				if ok then
+					setStatus("Exported. Copy the code from the window.", GREEN)
+					showCodeWindow(result)
+				else
+					setStatus("Export failed: " .. tostring(result), RED)
+				end
+			end)
+		end)
+
+		---------------------------------------------------------
+		-- test (F5), minimize, close
+		---------------------------------------------------------
+		local testGui = nil
+
+		local function stopTest()
+			if testGui then
+				testGui:Destroy()
+				testGui = nil
+			end
+			chip.Visible = false
+			main.Visible = true
+		end
+
+		local function startTest()
+			if testGui then
+				stopTest()
+				return
+			end
+			testGui = make("ScreenGui", { Name = "GuiBuilderTest", ResetOnSpawn = false, DisplayOrder = 99 }, PlayerGui)
+			for _, child in ipairs(designRoot:GetChildren()) do
+				if PROPS[child.ClassName] then child:Clone().Parent = testGui end
+			end
+			for _, inst in ipairs(testGui:GetDescendants()) do
+				if inst:IsA("TextBox") then inst.TextEditable = true end
+				if inst:IsA("ScrollingFrame") then inst.ScrollingEnabled = true end
+			end
+			main.Visible = false
+			chipMode = "test"
+			chip.Text = "Stop Test (F5)"
+			chip.Visible = true
+		end
+
+		connect(testButton.MouseButton1Click, startTest)
+		connect(UserInputService.InputBegan, function(input, processed)
+			if not processed and input.KeyCode == Enum.KeyCode.F5 and alive then startTest() end
+		end)
+
+		connect(minButton.MouseButton1Click, function()
+			main.Visible = false
+			chipMode = "min"
+			chip.Text = "GuiBuilder (open)"
+			chip.Visible = true
+		end)
+
+		connect(chip.MouseButton1Click, function()
+			if chipMode == "test" then
+				stopTest()
+			else
+				chip.Visible = false
+				main.Visible = true
+			end
+		end)
+
+		local function destroy()
+			if not alive then return end
+			alive = false
+			for _, connection in ipairs(connections) do connection:Disconnect() end
+			if testGui then testGui:Destroy() end
+			gui:Destroy()
+		end
+
+		connect(closeButton.MouseButton1Click, destroy)
+
+		pushHistory()
+		refreshProps()
+		loadColorEditor()
+
+		return { isAlive = function() return alive end, destroy = destroy, show = function() chip.Visible = false main.Visible = true end }
+	end
+
+	openGuiBuilder = function()
+		if activeBuilder and activeBuilder.isAlive() then
+			activeBuilder.show()
+			return
+		end
+		local ok, result = pcall(createGuiBuilder)
+		if ok then
+			activeBuilder = result
+		else
+			emit("GuiBuilder failed to open: " .. tostring(result), RED)
+		end
+	end
+
+	local function closeGuiBuilder()
+		if activeBuilder then
+			activeBuilder.destroy()
+			activeBuilder = nil
+		end
+	end
+
+
+	local INSTALL_LINES = {
+		"Reading package lists... Done",
+		"Building dependency tree... Done",
+		"The following NEW packages will be installed:",
+		"  guibuilder",
+		"Get:1 aether://repo/main guibuilder 1.0.0 [412 kB]",
+		"Fetched 412 kB in 1s (412 kB/s)",
+		"Selecting previously unselected package guibuilder.",
+		"Unpacking guibuilder (1.0.0) ...",
+		"Setting up guibuilder (1.0.0) ...",
+		"Linking export engine (LocalScript) ... OK",
+		"Installation complete. Opening GuiBuilder...",
+	}
+
+	local installing = false
+
+	local function installGuiBuilder()
+		if settings.installed then
+			openGuiBuilder()
+			return "GuiBuilder opened."
+		end
+		if installing then
+			return "Install already in progress."
+		end
+		installing = true
+		realTask.spawn(function()
+			for _, line in ipairs(INSTALL_LINES) do
+				addLine(line, AMBER)
+				realTask.wait(0.12)
+			end
+			settings.installed = true
+			saveSettings()
+			installing = false
+			openGuiBuilder()
+		end)
+		return "Installing guibuilder..."
+	end
+
+	-- the panel owns the `pkg` command and hands `pkg install guibuilder` to us
+	if registerPackage then
+		registerPackage("guibuilder", installGuiBuilder)
+	else
+		commands["pkg"] = function(args)
+			if tostring(args[1] or ""):lower() == "install" and tostring(args[2] or ""):lower() == "guibuilder" then
+				return installGuiBuilder()
+			end
+			return "Usage: pkg install guibuilder"
+		end
+	end
+end
+
+setupGuiBuilder()
