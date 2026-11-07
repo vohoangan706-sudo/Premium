@@ -149,7 +149,7 @@ local function setupDataview()
 
 	local function getGui()
 		if gui and gui.Parent then return gui end
-		gui = make("ScreenGui", { Name = "AetherDataview", ResetOnSpawn = false, DisplayOrder = 90 }, PlayerGui)
+		gui = make("ScreenGui", { Name = "AetherDataview", ResetOnSpawn = false, DisplayOrder = 90, ZIndexBehavior = Enum.ZIndexBehavior.Sibling }, PlayerGui)
 		return gui
 	end
 
