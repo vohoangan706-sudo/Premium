@@ -1,0 +1,973 @@
+-- ======================================================================
+--  Dataview  (standalone package for the Aetherfinix panel)
+--  Host this file (raw URL) and put the URL in the panel's
+--  PACKAGE_URLS.dataview slot. Then type:  pkg install dataview
+--  After installing, these work in the {} editor:
+--      Dv.Scripthub()   -- saved scripts: write, save, run, fetch from a URL
+--      Dv.Explorer()    -- browse the game's instances and edit properties
+--      Dv.Note()        -- notes (Dv.Note("quick text") adds one directly)
+--      Dv.Close()       -- closes all Dataview windows
+--  Running this file by itself does nothing: the panel loads it.
+-- ======================================================================
+local context = ...
+if type(context) ~= "table" then
+	warn("Dataview must be loaded by the Aetherfinix panel.")
+	return
+end
+
+local player = context.player
+local addLine = context.addLine
+local commands = context.commands
+local linuxHooks = context.linuxHooks
+local registerPackage = context.registerPackage
+
+local HttpService = game:GetService("HttpService")
+local UserInputService = game:GetService("UserInputService")
+
+local AMBER = Color3.fromRGB(255, 200, 0)
+local BRIGHT = Color3.fromRGB(255, 220, 120)
+local GREEN = Color3.fromRGB(150, 255, 150)
+local RED = Color3.fromRGB(255, 150, 150)
+
+-- everything Dataview saves (scripts, notes) lives in its own small file
+local SETTINGS_FILE = "AetherfinixDataview.json"
+local settings = {}
+local canPersist = (type(writefile) == "function" and type(readfile) == "function")
+
+if canPersist then
+	local ok, raw = pcall(function()
+		if type(isfile) == "function" and not isfile(SETTINGS_FILE) then return nil end
+		return readfile(SETTINGS_FILE)
+	end)
+	if ok and type(raw) == "string" and raw ~= "" then
+		local decoded, data = pcall(HttpService.JSONDecode, HttpService, raw)
+		if decoded and type(data) == "table" then settings = data end
+	end
+end
+if type(settings.scripts) ~= "table" then settings.scripts = {} end
+if type(settings.notes) ~= "table" then settings.notes = {} end
+
+local function saveSettings()
+	if not canPersist then return end
+	pcall(function() writefile(SETTINGS_FILE, HttpService:JSONEncode(settings)) end)
+end
+
+local function setupDataview()
+	local PlayerGui = player:WaitForChild("PlayerGui")
+
+	local BG = Color3.fromRGB(14, 14, 14)
+	local PANEL = Color3.fromRGB(22, 20, 12)
+	local EDGE = Color3.fromRGB(255, 200, 0)
+	local TEXT = Color3.fromRGB(240, 235, 215)
+	local DIM = Color3.fromRGB(150, 140, 110)
+	local FIELD = Color3.fromRGB(38, 33, 16)
+	local FIELD_ON = Color3.fromRGB(120, 90, 0)
+
+	---------------------------------------------------------------
+	-- small UI helpers
+	---------------------------------------------------------------
+	local function make(class, props, parent)
+		local inst = Instance.new(class)
+		for key, value in pairs(props) do inst[key] = value end
+		inst.Parent = parent
+		return inst
+	end
+
+	local function round(inst, radius)
+		make("UICorner", { CornerRadius = UDim.new(0, radius or 4) }, inst)
+	end
+
+	local function makeButton(parent, text, props)
+		props = props or {}
+		local b = make("TextButton", {
+			Size = props.Size or UDim2.new(0, 0, 0, 28),
+			AutomaticSize = props.AutomaticSize or Enum.AutomaticSize.X,
+			BackgroundColor3 = props.Color or FIELD,
+			TextColor3 = TEXT, Font = Enum.Font.Code, TextSize = props.TextSize or 13,
+			Text = text, BorderSizePixel = 0, LayoutOrder = props.LayoutOrder or 0,
+		}, parent)
+		round(b, 5)
+		make("UIPadding", { PaddingLeft = UDim.new(0, 8), PaddingRight = UDim.new(0, 8) }, b)
+		return b
+	end
+
+	local function makeBox(parent, size, position, text)
+		local box = make("TextBox", {
+			Size = size, Position = position, BackgroundColor3 = FIELD, TextColor3 = TEXT,
+			PlaceholderColor3 = DIM, Font = Enum.Font.Code, TextSize = 13, ClearTextOnFocus = false,
+			Text = text or "", TextXAlignment = Enum.TextXAlignment.Left, BorderSizePixel = 0,
+		}, parent)
+		round(box, 4)
+		make("UIPadding", { PaddingLeft = UDim.new(0, 6) }, box)
+		return box
+	end
+
+	local function makeLabel(parent, text, size, position, color, textSize)
+		return make("TextLabel", {
+			Size = size, Position = position, BackgroundTransparency = 1, Text = text,
+			TextColor3 = color or TEXT, Font = Enum.Font.Code, TextSize = textSize or 13,
+			TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
+		}, parent)
+	end
+
+	local function makePanel(parent, size, position)
+		local frame = make("Frame", { Size = size, Position = position, BackgroundColor3 = PANEL, BorderSizePixel = 0 }, parent)
+		round(frame, 6)
+		make("UIStroke", { Color = EDGE, Thickness = 1, Transparency = 0.5 }, frame)
+		return frame
+	end
+
+	local function makeScroll(parent, size, position, direction)
+		return make("ScrollingFrame", {
+			Size = size, Position = position, BackgroundTransparency = 1, BorderSizePixel = 0,
+			ScrollBarThickness = 4, CanvasSize = UDim2.new(0, 0, 0, 0),
+			AutomaticCanvasSize = direction or Enum.AutomaticSize.Y,
+		}, parent)
+	end
+
+	local function isPress(input)
+		return input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch
+	end
+
+	local function joinArgs(...)
+		local parts = {}
+		for i = 1, select("#", ...) do parts[i] = tostring((select(i, ...))) end
+		return table.concat(parts, "\t")
+	end
+
+	local function copyText(text)
+		return type(setclipboard) == "function" and pcall(setclipboard, text)
+	end
+
+	---------------------------------------------------------------
+	-- windows (draggable, minimize, close, click to bring to front)
+	---------------------------------------------------------------
+	local gui = nil
+	local windows = {}
+	local zCounter = 10
+	local drag = nil
+
+	local function getGui()
+		if gui and gui.Parent then return gui end
+		gui = make("ScreenGui", { Name = "AetherDataview", ResetOnSpawn = false, DisplayOrder = 90 }, PlayerGui)
+		return gui
+	end
+
+	local function front(win)
+		zCounter = zCounter + 1
+		win.frame.ZIndex = zCounter
+	end
+
+	local function createWindow(key, title, width, height)
+		local count = 0
+		for _ in pairs(windows) do count = count + 1 end
+
+		local frame = make("Frame", {
+			Name = key, Size = UDim2.new(width, 0, height, 0),
+			Position = UDim2.new((1 - width) / 2, count * 18, (1 - height) / 2, count * 18),
+			BackgroundColor3 = BG, BorderSizePixel = 0, Active = true,
+		}, getGui())
+		round(frame, 8)
+		make("UIStroke", { Color = EDGE, Thickness = 1.5 }, frame)
+
+		local bar = make("Frame", { Size = UDim2.new(1, 0, 0, 28), BackgroundColor3 = Color3.fromRGB(40, 30, 0), BorderSizePixel = 0, Active = true }, frame)
+		round(bar, 8)
+		makeLabel(bar, title, UDim2.new(1, -70, 1, 0), UDim2.new(0, 10, 0, 0), EDGE, 14)
+
+		local minButton = makeButton(bar, "-", { Size = UDim2.new(0, 24, 0, 20), AutomaticSize = Enum.AutomaticSize.None })
+		minButton.Position = UDim2.new(1, -56, 0, 4)
+		local closeButton = makeButton(bar, "X", { Size = UDim2.new(0, 24, 0, 20), AutomaticSize = Enum.AutomaticSize.None, Color = Color3.fromRGB(110, 35, 10) })
+		closeButton.Position = UDim2.new(1, -28, 0, 4)
+
+		local body = make("Frame", { Size = UDim2.new(1, 0, 1, -28), Position = UDim2.new(0, 0, 0, 28), BackgroundTransparency = 1 }, frame)
+
+		local win = { frame = frame, body = body, key = key }
+		windows[key] = win
+		front(win)
+
+		bar.InputBegan:Connect(function(input)
+			if isPress(input) then
+				front(win)
+				drag = { frame = frame, start = input.Position, pos = frame.Position }
+			end
+		end)
+		frame.InputBegan:Connect(function(input)
+			if isPress(input) then front(win) end
+		end)
+
+		local collapsed = false
+		minButton.MouseButton1Click:Connect(function()
+			collapsed = not collapsed
+			body.Visible = not collapsed
+			frame.Size = collapsed and UDim2.new(width, 0, 0, 28) or UDim2.new(width, 0, height, 0)
+		end)
+
+		function win.close()
+			windows[key] = nil
+			frame:Destroy()
+		end
+		closeButton.MouseButton1Click:Connect(win.close)
+		return win
+	end
+
+	UserInputService.InputChanged:Connect(function(input)
+		if drag and drag.frame.Parent and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+			local dx = input.Position.X - drag.start.X
+			local dy = input.Position.Y - drag.start.Y
+			drag.frame.Position = UDim2.new(drag.pos.X.Scale, drag.pos.X.Offset + dx, drag.pos.Y.Scale, drag.pos.Y.Offset + dy)
+		end
+	end)
+	UserInputService.InputEnded:Connect(function(input)
+		if drag and isPress(input) then drag = nil end
+	end)
+
+	local function closeAll()
+		local list = {}
+		for _, win in pairs(windows) do table.insert(list, win) end
+		for _, win in ipairs(list) do win.close() end
+	end
+
+	---------------------------------------------------------------
+	-- SCRIPTHUB
+	---------------------------------------------------------------
+	local function openScripthub()
+		if windows.scripthub then front(windows.scripthub) return end
+		local win = createWindow("scripthub", "Dataview - Scripthub", 0.76, 0.8)
+		local body = win.body
+		local scripts = settings.scripts
+		local current = nil
+
+		-- left: list
+		local left = makePanel(body, UDim2.new(0.3, -6, 1, -8), UDim2.new(0, 4, 0, 4))
+		local searchBox = makeBox(left, UDim2.new(1, -12, 0, 24), UDim2.new(0, 6, 0, 6), "")
+		searchBox.PlaceholderText = "Search scripts..."
+		local listScroll = makeScroll(left, UDim2.new(1, -8, 1, -76), UDim2.new(0, 4, 0, 34))
+		make("UIListLayout", { Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder }, listScroll)
+		local newButton = makeButton(left, "+ New script", { Size = UDim2.new(1, -12, 0, 28), AutomaticSize = Enum.AutomaticSize.None })
+		newButton.Position = UDim2.new(0, 6, 1, -34)
+
+		-- right: editor
+		local right = make("Frame", { Size = UDim2.new(0.7, -4, 1, -8), Position = UDim2.new(0.3, 0, 0, 4), BackgroundTransparency = 1 }, body)
+		local nameBox = makeBox(right, UDim2.new(1, 0, 0, 26), UDim2.new(0, 0, 0, 0), "")
+		nameBox.PlaceholderText = "Script name"
+		local urlBox = makeBox(right, UDim2.new(1, -66, 0, 26), UDim2.new(0, 0, 0, 30), "")
+		urlBox.PlaceholderText = "Paste a raw URL to fetch a script..."
+		local fetchButton = makeButton(right, "Fetch", { Size = UDim2.new(0, 60, 0, 26), AutomaticSize = Enum.AutomaticSize.None })
+		fetchButton.Position = UDim2.new(1, -60, 0, 30)
+
+		local editorFrame = make("ScrollingFrame", {
+			Size = UDim2.new(1, 0, 1, -184), Position = UDim2.new(0, 0, 0, 60),
+			BackgroundColor3 = Color3.fromRGB(10, 9, 5), BorderSizePixel = 0, ScrollBarThickness = 5,
+			CanvasSize = UDim2.new(0, 0, 0, 0), AutomaticCanvasSize = Enum.AutomaticSize.XY,
+			ScrollingDirection = Enum.ScrollingDirection.XY,
+		}, right)
+		round(editorFrame, 4)
+		local editor = make("TextBox", {
+			Size = UDim2.new(1, 0, 0, 200), AutomaticSize = Enum.AutomaticSize.XY, BackgroundTransparency = 1,
+			TextColor3 = AMBER, Font = Enum.Font.Code, TextSize = 14, MultiLine = true, TextWrapped = false,
+			ClearTextOnFocus = false, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+			PlaceholderText = "-- write or paste Lua here", PlaceholderColor3 = DIM, Text = "",
+		}, editorFrame)
+		make("UIPadding", { PaddingLeft = UDim.new(0, 6), PaddingTop = UDim.new(0, 4) }, editor)
+
+		local outFrame = make("ScrollingFrame", {
+			Size = UDim2.new(1, 0, 0, 80), Position = UDim2.new(0, 0, 1, -118),
+			BackgroundColor3 = Color3.fromRGB(10, 9, 5), BorderSizePixel = 0, ScrollBarThickness = 4,
+			CanvasSize = UDim2.new(0, 0, 0, 0), AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		}, right)
+		round(outFrame, 4)
+		make("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }, outFrame)
+
+		local buttonRow = make("Frame", { Size = UDim2.new(1, 0, 0, 30), Position = UDim2.new(0, 0, 1, -32), BackgroundTransparency = 1 }, right)
+		make("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 5), VerticalAlignment = Enum.VerticalAlignment.Center }, buttonRow)
+		local saveButton = makeButton(buttonRow, "Save", { Color = FIELD_ON })
+		local runButton = makeButton(buttonRow, "Run", { Color = FIELD_ON })
+		local copyButton = makeButton(buttonRow, "Copy")
+		local deleteButton = makeButton(buttonRow, "Delete", { Color = Color3.fromRGB(110, 35, 10) })
+
+		local outCount = 0
+		local function addOut(text, color)
+			outCount = outCount + 1
+			make("TextLabel", {
+				Size = UDim2.new(1, -6, 0, 16), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1,
+				Text = tostring(text), TextColor3 = color or AMBER, Font = Enum.Font.Code, TextSize = 12,
+				TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left, LayoutOrder = outCount,
+			}, outFrame)
+			local rows = {}
+			for _, child in ipairs(outFrame:GetChildren()) do
+				if child:IsA("TextLabel") then table.insert(rows, child) end
+			end
+			if #rows > 80 then rows[1]:Destroy() end
+			outFrame.CanvasPosition = Vector2.new(0, 1e6)
+		end
+
+		local function refreshList()
+			for _, child in ipairs(listScroll:GetChildren()) do
+				if child:IsA("TextButton") then child:Destroy() end
+			end
+			local query = searchBox.Text:lower()
+			for index, script in ipairs(scripts) do
+				if query == "" or script.name:lower():find(query, 1, true) then
+					local row = makeButton(listScroll, script.name, {
+						Size = UDim2.new(1, -6, 0, 26), AutomaticSize = Enum.AutomaticSize.None,
+						LayoutOrder = index, Color = (index == current) and FIELD_ON or FIELD,
+					})
+					row.TextXAlignment = Enum.TextXAlignment.Left
+					row.MouseButton1Click:Connect(function()
+						current = index
+						nameBox.Text = script.name
+						editor.Text = script.code
+						refreshList()
+					end)
+				end
+			end
+		end
+
+		searchBox:GetPropertyChangedSignal("Text"):Connect(refreshList)
+
+		newButton.MouseButton1Click:Connect(function()
+			current = nil
+			nameBox.Text = ""
+			editor.Text = ""
+			refreshList()
+		end)
+
+		saveButton.MouseButton1Click:Connect(function()
+			local name = nameBox.Text:gsub("^%s+", ""):gsub("%s+$", "")
+			if name == "" then name = "Untitled" end
+			if current and scripts[current] then
+				scripts[current].name = name
+				scripts[current].code = editor.Text
+			else
+				table.insert(scripts, { name = name, code = editor.Text })
+				current = #scripts
+			end
+			saveSettings()
+			refreshList()
+			addOut("Saved '" .. name .. "'" .. (canPersist and "." or " (memory only: no writefile)."), GREEN)
+		end)
+
+		deleteButton.MouseButton1Click:Connect(function()
+			if current and scripts[current] then
+				local name = scripts[current].name
+				table.remove(scripts, current)
+				current = nil
+				nameBox.Text = ""
+				editor.Text = ""
+				saveSettings()
+				refreshList()
+				addOut("Deleted '" .. name .. "'.", BRIGHT)
+			end
+		end)
+
+		copyButton.MouseButton1Click:Connect(function()
+			if copyText(editor.Text) then
+				addOut("Copied to clipboard.", GREEN)
+			else
+				addOut("No clipboard here: select the text in the editor and copy it.", RED)
+			end
+		end)
+
+		fetchButton.MouseButton1Click:Connect(function()
+			local url = urlBox.Text:gsub("^%s+", ""):gsub("%s+$", "")
+			if url == "" then return end
+			addOut("Fetching...", BRIGHT)
+			task.spawn(function()
+				local ok, result = pcall(function() return game:HttpGet(url) end)
+				if ok and type(result) == "string" then
+					editor.Text = result
+					if nameBox.Text == "" then nameBox.Text = url:match("([^/]+)$") or "Fetched script" end
+					addOut("Fetched " .. #result .. " characters. Press Save to keep it.", GREEN)
+				else
+					addOut("Fetch failed: " .. tostring(result), RED)
+				end
+			end)
+		end)
+
+		runButton.MouseButton1Click:Connect(function()
+			local code = editor.Text
+			if not code:match("%S") then
+				addOut("Nothing to run.", RED)
+				return
+			end
+			addOut("Running...", BRIGHT)
+			task.spawn(function()
+				local ok, fn, compileErr = pcall(loadstring, code)
+				if not ok then
+					addOut("loadstring unavailable: " .. tostring(fn), RED)
+					return
+				end
+				if type(fn) ~= "function" then
+					addOut("Compile error: " .. tostring(compileErr), RED)
+					return
+				end
+				pcall(function()
+					local env = setmetatable({
+						print = function(...) addOut(joinArgs(...), AMBER) end,
+						warn = function(...) addOut(joinArgs(...), BRIGHT) end,
+					}, { __index = getfenv(fn) })
+					setfenv(fn, env)
+				end)
+				local runOk, runErr = pcall(fn)
+				if runOk then addOut("Done.", GREEN) else addOut("Error: " .. tostring(runErr), RED) end
+			end)
+		end)
+
+		refreshList()
+	end
+
+	---------------------------------------------------------------
+	-- EXPLORER
+	---------------------------------------------------------------
+	local LUA_KEYWORDS = {}
+	for word in ("and break do else elseif end false for function if in local nil not or repeat return then true until while continue"):gmatch("%S+") do
+		LUA_KEYWORDS[word] = true
+	end
+
+	local function pathOf(inst)
+		local chain = {}
+		local cur = inst
+		while cur and cur ~= game do
+			table.insert(chain, 1, cur)
+			cur = cur.Parent
+		end
+		if cur ~= game then return "(not in the game tree)" end
+		local out = "game"
+		for index, node in ipairs(chain) do
+			local isService = false
+			if index == 1 then
+				local ok, service = pcall(game.GetService, game, node.ClassName)
+				isService = ok and service == node
+			end
+			if isService then
+				out = out .. ":GetService(\"" .. node.ClassName .. "\")"
+			elseif node.Name:match("^[%a_][%w_]*$") and not LUA_KEYWORDS[node.Name] then
+				out = out .. "." .. node.Name
+			else
+				out = out .. "[\"" .. node.Name:gsub("\\", "\\\\"):gsub("\"", "\\\"") .. "\"]"
+			end
+		end
+		return out
+	end
+
+	local ROOTS = {
+		{ "Workspace", function() return workspace end },
+		{ "Players", function() return game:GetService("Players") end },
+		{ "ReplicatedStorage", function() return game:GetService("ReplicatedStorage") end },
+		{ "Lighting", function() return game:GetService("Lighting") end },
+		{ "StarterGui", function() return game:GetService("StarterGui") end },
+		{ "PlayerGui", function() return PlayerGui end },
+		{ "game", function() return game end },
+	}
+
+	-- properties tried on whatever you select; only the ones that exist show up
+	local CANDIDATE_PROPS = {
+		"Name", "ClassName", "Parent", "Visible", "Enabled", "Text", "Value", "Position", "Size", "CFrame",
+		"Orientation", "Anchored", "CanCollide", "CanTouch", "CanQuery", "Transparency", "Color", "Material",
+		"Massless", "BackgroundColor3", "BackgroundTransparency", "TextColor3", "ZIndex", "Image",
+		"Health", "MaxHealth", "WalkSpeed", "JumpPower", "JumpHeight", "HipHeight",
+		"Volume", "Playing", "Looped", "SoundId", "Brightness", "Range", "Ambient", "ClockTime", "FieldOfView",
+		"Disabled", "RunContext", "Archivable",
+	}
+
+	local function openExplorer()
+		if windows.explorer then front(windows.explorer) return end
+		local win = createWindow("explorer", "Dataview - Explorer", 0.82, 0.82)
+		local body = win.body
+
+		local rootIndex = 1
+		local expanded = {}
+		local selectedInst = nil
+		local MAX_ROWS = 400
+		local MAX_KIDS = 150
+
+		-- left: tree
+		local left = makePanel(body, UDim2.new(0.52, -6, 1, -8), UDim2.new(0, 4, 0, 4))
+		local rootButton = makeButton(left, ROOTS[1][1], { Size = UDim2.new(0.42, -8, 0, 24), AutomaticSize = Enum.AutomaticSize.None, TextSize = 12 })
+		rootButton.Position = UDim2.new(0, 6, 0, 6)
+		local searchBox = makeBox(left, UDim2.new(0.58, -8, 0, 24), UDim2.new(0.42, 2, 0, 6), "")
+		searchBox.PlaceholderText = "Search names..."
+		local treeScroll = makeScroll(left, UDim2.new(1, -8, 1, -62), UDim2.new(0, 4, 0, 34), Enum.AutomaticSize.XY)
+		treeScroll.ScrollingDirection = Enum.ScrollingDirection.XY
+		make("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }, treeScroll)
+		local treeStatus = makeLabel(left, "", UDim2.new(1, -12, 0, 18), UDim2.new(0, 6, 1, -22), DIM, 11)
+
+		-- right: properties
+		local right = makePanel(body, UDim2.new(0.48, -4, 1, -8), UDim2.new(0.52, 2, 0, 4))
+		local pathBox = makeBox(right, UDim2.new(1, -12, 0, 24), UDim2.new(0, 6, 0, 6), "")
+		pathBox.PlaceholderText = "Select something to see its path"
+		pathBox.TextEditable = true
+		pathBox.TextSize = 11
+		local actionRow = make("Frame", { Size = UDim2.new(1, -12, 0, 26), Position = UDim2.new(0, 6, 0, 34), BackgroundTransparency = 1 }, right)
+		make("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4), VerticalAlignment = Enum.VerticalAlignment.Center }, actionRow)
+		local copyPathButton = makeButton(actionRow, "Copy path", { Size = UDim2.new(0, 0, 0, 24), TextSize = 12 })
+		local upButton = makeButton(actionRow, "Up", { Size = UDim2.new(0, 0, 0, 24), TextSize = 12 })
+		local gotoButton = makeButton(actionRow, "Go to", { Size = UDim2.new(0, 0, 0, 24), TextSize = 12 })
+		local deleteButton = makeButton(actionRow, "Delete", { Size = UDim2.new(0, 0, 0, 24), TextSize = 12, Color = Color3.fromRGB(110, 35, 10) })
+		local propsScroll = makeScroll(right, UDim2.new(1, -8, 1, -88), UDim2.new(0, 4, 0, 64))
+		make("UIListLayout", { Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder }, propsScroll)
+		local propsStatus = makeLabel(right, "", UDim2.new(1, -12, 0, 18), UDim2.new(0, 6, 1, -22), DIM, 11)
+
+		local rebuildTree, refreshProps
+
+		local function setPropsStatus(text, color)
+			propsStatus.Text = text
+			propsStatus.TextColor3 = color or DIM
+		end
+
+		local function hasChildren(inst)
+			local ok, kids = pcall(inst.GetChildren, inst)
+			return ok and #kids > 0
+		end
+
+		local function flatten(inst, depth, out)
+			if #out >= MAX_ROWS then return end
+			table.insert(out, { inst = inst, depth = depth })
+			if expanded[inst] then
+				local ok, kids = pcall(inst.GetChildren, inst)
+				if ok then
+					for index, kid in ipairs(kids) do
+						if index > MAX_KIDS then
+							table.insert(out, { more = #kids - MAX_KIDS, depth = depth + 1 })
+							break
+						end
+						flatten(kid, depth + 1, out)
+					end
+				end
+			end
+		end
+
+		local function selectNode(inst)
+			selectedInst = inst
+			refreshProps()
+			rebuildTree()
+		end
+
+		rebuildTree = function()
+			for _, child in ipairs(treeScroll:GetChildren()) do
+				if not child:IsA("UIListLayout") then child:Destroy() end
+			end
+			local root = ROOTS[rootIndex][2]()
+			local rows = {}
+			local query = searchBox.Text:lower()
+			if query ~= "" then
+				local ok, all = pcall(root.GetDescendants, root)
+				if ok then
+					for _, inst in ipairs(all) do
+						if inst.Name:lower():find(query, 1, true) then
+							table.insert(rows, { inst = inst, depth = 0, flat = true })
+							if #rows >= 200 then break end
+						end
+					end
+				end
+				treeStatus.Text = #rows .. " match(es)" .. (#rows >= 200 and " (showing the first 200)" or "")
+			else
+				local ok, kids = pcall(root.GetChildren, root)
+				if ok then
+					for index, kid in ipairs(kids) do
+						if index > MAX_KIDS then
+							table.insert(rows, { more = #kids - MAX_KIDS, depth = 0 })
+							break
+						end
+						flatten(kid, 0, rows)
+					end
+				end
+				treeStatus.Text = ROOTS[rootIndex][1] .. ": " .. #rows .. " row(s) shown"
+			end
+
+			for index, row in ipairs(rows) do
+				local line = make("Frame", { Size = UDim2.new(0, 560, 0, 22), BackgroundTransparency = 1, LayoutOrder = index }, treeScroll)
+				if row.more then
+					makeLabel(line, "... " .. row.more .. " more", UDim2.new(1, 0, 1, 0), UDim2.new(0, 10 + row.depth * 14, 0, 0), DIM, 12)
+				else
+					local inst = row.inst
+					local indent = row.depth * 14
+					if not row.flat and hasChildren(inst) then
+						local arrow = makeButton(line, expanded[inst] and "-" or "+", {
+							Size = UDim2.new(0, 20, 0, 20), AutomaticSize = Enum.AutomaticSize.None, TextSize = 12,
+						})
+						arrow.Position = UDim2.new(0, indent, 0, 1)
+						arrow.MouseButton1Click:Connect(function()
+							expanded[inst] = not expanded[inst]
+							rebuildTree()
+						end)
+					end
+					local isSelected = inst == selectedInst
+					local label = make("TextButton", {
+						Size = UDim2.new(0, 400, 1, 0), Position = UDim2.new(0, indent + 24, 0, 0),
+						BackgroundColor3 = FIELD_ON, BackgroundTransparency = isSelected and 0 or 1, BorderSizePixel = 0,
+						Text = inst.Name .. "  [" .. inst.ClassName .. "]", TextColor3 = isSelected and TEXT or AMBER,
+						Font = Enum.Font.Code, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
+					}, line)
+					label.MouseButton1Click:Connect(function() selectNode(inst) end)
+				end
+			end
+		end
+
+		local function propRow(name, value, order, inst)
+			local row = make("Frame", { Size = UDim2.new(1, -6, 0, 24), BackgroundTransparency = 1, LayoutOrder = order }, propsScroll)
+			makeLabel(row, name, UDim2.new(0.38, -2, 1, 0), UDim2.new(0, 2, 0, 0), TEXT, 12)
+			local kind = type(value)
+			if name == "ClassName" or name == "Parent" or name == "Children" or (kind ~= "string" and kind ~= "number" and kind ~= "boolean") then
+				makeLabel(row, tostring(value), UDim2.new(0.62, -4, 1, 0), UDim2.new(0.38, 0, 0, 0), DIM, 12)
+			elseif kind == "boolean" then
+				local toggle = makeButton(row, tostring(value), {
+					Size = UDim2.new(0.62, -4, 1, -2), AutomaticSize = Enum.AutomaticSize.None, TextSize = 12,
+					Color = value and FIELD_ON or FIELD,
+				})
+				toggle.Position = UDim2.new(0.38, 0, 0, 1)
+				toggle.MouseButton1Click:Connect(function()
+					local ok, err = pcall(function() inst[name] = not value end)
+					if not ok then setPropsStatus(tostring(err), RED) end
+					refreshProps()
+				end)
+			else
+				local box = makeBox(row, UDim2.new(0.62, -4, 1, -2), UDim2.new(0.38, 0, 0, 1), tostring(value))
+				box.TextSize = 12
+				box.FocusLost:Connect(function()
+					local newValue = box.Text
+					if kind == "number" then newValue = tonumber(newValue) end
+					if newValue == nil then
+						refreshProps()
+						return
+					end
+					local ok, err = pcall(function() inst[name] = newValue end)
+					if ok then
+						setPropsStatus("Set " .. name .. ".", GREEN)
+					else
+						setPropsStatus(tostring(err), RED)
+					end
+					refreshProps()
+					rebuildTree()
+				end)
+			end
+		end
+
+		refreshProps = function()
+			for _, child in ipairs(propsScroll:GetChildren()) do
+				if not child:IsA("UIListLayout") then child:Destroy() end
+			end
+			local inst = selectedInst
+			if not inst or not inst.Parent then
+				selectedInst = nil
+				pathBox.Text = ""
+				return
+			end
+			pathBox.Text = pathOf(inst)
+			local order = 0
+			for _, name in ipairs(CANDIDATE_PROPS) do
+				local ok, value = pcall(function() return inst[name] end)
+				if ok and value ~= nil then
+					order = order + 1
+					if name == "Parent" then value = value:GetFullName() end
+					propRow(name, value, order, inst)
+				end
+			end
+			local ok, kids = pcall(inst.GetChildren, inst)
+			if ok then
+				order = order + 1
+				propRow("Children", #kids, order, inst)
+			end
+		end
+
+		rootButton.MouseButton1Click:Connect(function()
+			rootIndex = rootIndex % #ROOTS + 1
+			rootButton.Text = ROOTS[rootIndex][1]
+			selectedInst = nil
+			refreshProps()
+			rebuildTree()
+		end)
+		searchBox:GetPropertyChangedSignal("Text"):Connect(rebuildTree)
+
+		copyPathButton.MouseButton1Click:Connect(function()
+			if not selectedInst then return end
+			if copyText(pathOf(selectedInst)) then
+				setPropsStatus("Path copied.", GREEN)
+			else
+				setPropsStatus("No clipboard here: tap the path box and copy it.", RED)
+			end
+		end)
+
+		upButton.MouseButton1Click:Connect(function()
+			if selectedInst and selectedInst.Parent and selectedInst.Parent ~= game then
+				local parent = selectedInst.Parent
+				expanded[parent] = true
+				selectNode(parent)
+			end
+		end)
+
+		gotoButton.MouseButton1Click:Connect(function()
+			local inst = selectedInst
+			local char = player.Character
+			local hrp = char and char:FindFirstChild("HumanoidRootPart")
+			if not (inst and hrp) then return end
+			local ok, err = pcall(function()
+				if inst:IsA("BasePart") then
+					hrp.CFrame = inst.CFrame + Vector3.new(0, 5, 0)
+				elseif inst:IsA("Model") then
+					hrp.CFrame = inst:GetPivot() + Vector3.new(0, 5, 0)
+				else
+					error("only parts and models can be teleported to")
+				end
+			end)
+			setPropsStatus(ok and "Teleported." or tostring(err), ok and GREEN or RED)
+		end)
+
+		local deleteArmed = false
+		deleteButton.MouseButton1Click:Connect(function()
+			if not selectedInst then return end
+			if not deleteArmed then
+				deleteArmed = true
+				deleteButton.Text = "Sure?"
+				task.delay(3, function()
+					deleteArmed = false
+					if deleteButton.Parent then deleteButton.Text = "Delete" end
+				end)
+				return
+			end
+			deleteArmed = false
+			deleteButton.Text = "Delete"
+			local ok, err = pcall(function() selectedInst:Destroy() end)
+			selectedInst = nil
+			setPropsStatus(ok and "Deleted (on your client)." or tostring(err), ok and GREEN or RED)
+			refreshProps()
+			rebuildTree()
+		end)
+
+		rebuildTree()
+	end
+
+	---------------------------------------------------------------
+	-- NOTES
+	---------------------------------------------------------------
+	local function openNotes()
+		if windows.notes then front(windows.notes) return end
+		local win = createWindow("notes", "Dataview - Notes", 0.6, 0.72)
+		local body = win.body
+		local notes = settings.notes
+		local current = nil
+		local saveToken = 0
+
+		local left = makePanel(body, UDim2.new(0.34, -6, 1, -8), UDim2.new(0, 4, 0, 4))
+		local listScroll = makeScroll(left, UDim2.new(1, -8, 1, -44), UDim2.new(0, 4, 0, 4))
+		make("UIListLayout", { Padding = UDim.new(0, 3), SortOrder = Enum.SortOrder.LayoutOrder }, listScroll)
+		local newButton = makeButton(left, "+ New note", { Size = UDim2.new(1, -12, 0, 28), AutomaticSize = Enum.AutomaticSize.None })
+		newButton.Position = UDim2.new(0, 6, 1, -34)
+
+		local right = make("Frame", { Size = UDim2.new(0.66, -4, 1, -8), Position = UDim2.new(0.34, 0, 0, 4), BackgroundTransparency = 1 }, body)
+		local titleBox = makeBox(right, UDim2.new(1, 0, 0, 26), UDim2.new(0, 0, 0, 0), "")
+		titleBox.PlaceholderText = "Title"
+		local bodyScroll = make("ScrollingFrame", {
+			Size = UDim2.new(1, 0, 1, -98), Position = UDim2.new(0, 0, 0, 30),
+			BackgroundColor3 = Color3.fromRGB(10, 9, 5), BorderSizePixel = 0, ScrollBarThickness = 5,
+			CanvasSize = UDim2.new(0, 0, 0, 0), AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		}, right)
+		round(bodyScroll, 4)
+		local bodyBox = make("TextBox", {
+			Size = UDim2.new(1, 0, 0, 200), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1,
+			TextColor3 = TEXT, Font = Enum.Font.Code, TextSize = 14, MultiLine = true, TextWrapped = true,
+			ClearTextOnFocus = false, TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top,
+			PlaceholderText = "Write your note here...", PlaceholderColor3 = DIM, Text = "",
+		}, bodyScroll)
+		make("UIPadding", { PaddingLeft = UDim.new(0, 6), PaddingTop = UDim.new(0, 4), PaddingRight = UDim.new(0, 6) }, bodyBox)
+
+		local buttonRow = make("Frame", { Size = UDim2.new(1, 0, 0, 30), Position = UDim2.new(0, 0, 1, -64), BackgroundTransparency = 1 }, right)
+		make("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 5), VerticalAlignment = Enum.VerticalAlignment.Center }, buttonRow)
+		local copyButton = makeButton(buttonRow, "Copy")
+		local deleteButton = makeButton(buttonRow, "Delete", { Color = Color3.fromRGB(110, 35, 10) })
+		local status = makeLabel(right, "", UDim2.new(1, 0, 0, 18), UDim2.new(0, 0, 1, -22), DIM, 12)
+
+		local refreshList
+
+		local function setStatus(text, color)
+			status.Text = text
+			status.TextColor3 = color or DIM
+		end
+
+		local function commit()
+			if not current or not notes[current] then return end
+			notes[current].title = titleBox.Text
+			notes[current].body = bodyBox.Text
+			saveSettings()
+			refreshList()
+			setStatus(canPersist and "Saved." or "Saved (memory only: no writefile).", GREEN)
+		end
+
+		-- saves a moment after you stop typing
+		local function scheduleSave()
+			saveToken = saveToken + 1
+			local token = saveToken
+			task.delay(1.2, function()
+				if token == saveToken then commit() end
+			end)
+		end
+
+		refreshList = function()
+			for _, child in ipairs(listScroll:GetChildren()) do
+				if child:IsA("TextButton") then child:Destroy() end
+			end
+			for index, note in ipairs(notes) do
+				local title = (note.title and note.title ~= "") and note.title or "Untitled"
+				local row = makeButton(listScroll, title, {
+					Size = UDim2.new(1, -6, 0, 26), AutomaticSize = Enum.AutomaticSize.None,
+					LayoutOrder = index, Color = (index == current) and FIELD_ON or FIELD,
+				})
+				row.TextXAlignment = Enum.TextXAlignment.Left
+				row.MouseButton1Click:Connect(function()
+					current = index
+					titleBox.Text = note.title or ""
+					bodyBox.Text = note.body or ""
+					refreshList()
+				end)
+			end
+		end
+
+		local function newNote()
+			table.insert(notes, { title = "New note", body = "" })
+			current = #notes
+			titleBox.Text = "New note"
+			bodyBox.Text = ""
+			saveSettings()
+			refreshList()
+		end
+
+		titleBox:GetPropertyChangedSignal("Text"):Connect(function()
+			if current then scheduleSave() end
+		end)
+		bodyBox:GetPropertyChangedSignal("Text"):Connect(function()
+			if current then scheduleSave() end
+		end)
+
+		newButton.MouseButton1Click:Connect(newNote)
+
+		copyButton.MouseButton1Click:Connect(function()
+			if copyText(bodyBox.Text) then
+				setStatus("Copied.", GREEN)
+			else
+				setStatus("No clipboard here: select the text and copy it.", RED)
+			end
+		end)
+
+		deleteButton.MouseButton1Click:Connect(function()
+			if current and notes[current] then
+				table.remove(notes, current)
+				current = nil
+				titleBox.Text = ""
+				bodyBox.Text = ""
+				saveSettings()
+				refreshList()
+				setStatus("Deleted.", BRIGHT)
+			end
+		end)
+
+		if #notes == 0 then
+			newNote()
+		else
+			current = #notes
+			titleBox.Text = notes[current].title or ""
+			bodyBox.Text = notes[current].body or ""
+			refreshList()
+		end
+	end
+
+	---------------------------------------------------------------
+	-- the Dv API (used from the {} editor)
+	---------------------------------------------------------------
+	local Dv = {}
+
+	function Dv.Scripthub() openScripthub() end
+	function Dv.Explorer() openExplorer() end
+
+	-- Dv.Note() opens the notes app; Dv.Note("text") saves a new note first
+	function Dv.Note(text)
+		if text ~= nil then
+			local content = tostring(text)
+			table.insert(settings.notes, { title = content:sub(1, 24), body = content })
+			saveSettings()
+			if windows.notes then windows.notes.close() end
+		end
+		openNotes()
+	end
+
+	function Dv.Close() closeAll() end
+
+	local function enableGlobals()
+		linuxHooks.extraGlobals = linuxHooks.extraGlobals or {}
+		linuxHooks.extraGlobals.Dv = Dv
+	end
+
+	local function disableGlobals()
+		if linuxHooks.extraGlobals then linuxHooks.extraGlobals.Dv = nil end
+	end
+
+	---------------------------------------------------------------
+	-- `pkg install dataview` / `pkg uninstall dataview`
+	---------------------------------------------------------------
+	local INSTALL_LINES = {
+		"Reading package lists... Done",
+		"Building dependency tree... Done",
+		"The following NEW packages will be installed:",
+		"  dataview",
+		"Get:1 aether://repo/main dataview 1.0.0 [688 kB]",
+		"Fetched 688 kB in 1s (688 kB/s)",
+		"Selecting previously unselected package dataview.",
+		"Unpacking dataview (1.0.0) ...",
+		"Setting up dataview (1.0.0) ...",
+		"Linking Dv.Scripthub, Dv.Explorer, Dv.Note ... OK",
+		"Installation complete.",
+	}
+
+	local installing = false
+
+	local function installDataview()
+		if settings.installed then
+			return "Dataview is already installed. Use Dv.Scripthub(), Dv.Explorer() or Dv.Note() in {} mode."
+		end
+		if installing then
+			return "Install already in progress."
+		end
+		installing = true
+		task.spawn(function()
+			for _, line in ipairs(INSTALL_LINES) do
+				addLine(line, AMBER)
+				task.wait(0.12)
+			end
+			settings.installed = true
+			saveSettings()
+			enableGlobals()
+			installing = false
+			addLine("Dataview ready. In {} mode: Dv.Scripthub()  Dv.Explorer()  Dv.Note()", GREEN)
+		end)
+		return "Installing dataview..."
+	end
+
+	-- keeps your saved scripts and notes; only removes the install
+	local function uninstallDataview()
+		if not settings.installed then
+			return "Dataview isn't installed."
+		end
+		closeAll()
+		settings.installed = nil
+		saveSettings()
+		disableGlobals()
+		return "Dataview uninstalled. (Your saved scripts and notes are kept.)"
+	end
+
+	if settings.installed then
+		enableGlobals() -- installed earlier: Dv is available right away
+	end
+
+	-- the panel owns the `pkg` command and hands `pkg install dataview` to us
+	if registerPackage then
+		registerPackage("dataview", installDataview, uninstallDataview)
+	else
+		commands["pkg"] = function(args)
+			if tostring(args[1] or ""):lower() == "install" and tostring(args[2] or ""):lower() == "dataview" then
+				return installDataview()
+			end
+			return "Usage: pkg install dataview"
+		end
+	end
+end
+
+setupDataview()
