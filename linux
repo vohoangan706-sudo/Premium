@@ -2072,9 +2072,27 @@ local function setupLuaOS()
 		return "Installing Aetherfinix Linux..."
 	end
 
+	-- keeps your storage / fs / settings data; only removes the install
+	local function uninstallLinux()
+		if installing then
+			return "Wait for the install to finish first."
+		end
+		if not settings.linux_installed then
+			return "Aetherfinix Linux isn't installed."
+		end
+		if booted then
+			shutdownSystem(false)
+		end
+		settings.linux_installed = nil
+		settings.theme = nil
+		applyTheme("amber")
+		saveSettings()
+		return "Aetherfinix Linux uninstalled. (Your saved storage and files are kept.)"
+	end
+
 	-- the panel owns the `pkg` command and hands `pkg install linux` to us
 	if registerPackage then
-		registerPackage("linux", function() return installLinux() end)
+		registerPackage("linux", function() return installLinux() end, function() return uninstallLinux() end)
 	else
 		commands["pkg"] = function(args)
 			local action = tostring(args[1] or ""):lower()
