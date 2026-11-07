@@ -293,7 +293,7 @@ local function setupGuiBuilder()
 		---------------------------------------------------------
 		-- main window
 		---------------------------------------------------------
-		local gui = make("ScreenGui", { Name = "AetherGuiBuilder", ResetOnSpawn = false, DisplayOrder = 100 }, PlayerGui)
+		local gui = make("ScreenGui", { Name = "AetherGuiBuilder", ResetOnSpawn = false, DisplayOrder = 100, ZIndexBehavior = Enum.ZIndexBehavior.Sibling }, PlayerGui)
 
 		local main = make("Frame", {
 			Name = "Main", Size = UDim2.new(1, -12, 1, -12), Position = UDim2.new(0, 6, 0, 6),
@@ -1041,6 +1041,7 @@ local function setupGuiBuilder()
 			add("local screenGui = Instance.new(\"ScreenGui\")")
 			add("screenGui.Name = \"GeneratedGui\"")
 			add("screenGui.ResetOnSpawn = false")
+			add("screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling")
 			add("screenGui.Parent = player:WaitForChild(\"PlayerGui\")")
 			add("")
 			for _, child in ipairs(designRoot:GetChildren()) do
@@ -1153,7 +1154,7 @@ local function setupGuiBuilder()
 				stopTest()
 				return
 			end
-			testGui = make("ScreenGui", { Name = "GuiBuilderTest", ResetOnSpawn = false, DisplayOrder = 99 }, PlayerGui)
+			testGui = make("ScreenGui", { Name = "GuiBuilderTest", ResetOnSpawn = false, DisplayOrder = 99, ZIndexBehavior = Enum.ZIndexBehavior.Sibling }, PlayerGui)
 			for _, child in ipairs(designRoot:GetChildren()) do
 				if PROPS[child.ClassName] then child:Clone().Parent = testGui end
 			end
