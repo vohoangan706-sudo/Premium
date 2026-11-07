@@ -22,6 +22,7 @@ local clearConsole = context.clearConsole
 local themeState = context.themeState
 local linuxHooks = context.linuxHooks
 local commands = context.commands
+local registerPackage = context.registerPackage
 local PANEL_TITLE = context.PANEL_TITLE
 
 local Players = game:GetService("Players")
@@ -2071,13 +2072,18 @@ local function setupLuaOS()
 		return "Installing Aetherfinix Linux..."
 	end
 
-	commands["pkg"] = function(args)
-		local action = tostring(args[1] or ""):lower()
-		local package = tostring(args[2] or ""):lower()
-		if action == "install" and (package == "linux" or package == "aetherfinix-linux") then
-			return installLinux()
+	-- the panel owns the `pkg` command and hands `pkg install linux` to us
+	if registerPackage then
+		registerPackage("linux", function() return installLinux() end)
+	else
+		commands["pkg"] = function(args)
+			local action = tostring(args[1] or ""):lower()
+			local package = tostring(args[2] or ""):lower()
+			if action == "install" and (package == "linux" or package == "aetherfinix-linux") then
+				return installLinux()
+			end
+			return "Usage: pkg install <package>"
 		end
-		return "Usage: pkg install <package>"
 	end
 
 	loadSettings()
