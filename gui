@@ -296,7 +296,7 @@ local function setupGuiBuilder()
 		local gui = make("ScreenGui", { Name = "AetherGuiBuilder", ResetOnSpawn = false, DisplayOrder = 100, ZIndexBehavior = Enum.ZIndexBehavior.Sibling }, PlayerGui)
 
 		local main = make("Frame", {
-			Name = "Main", Size = UDim2.new(1, -12, 1, -12), Position = UDim2.new(0, 6, 0, 6),
+			Name = "Main", Size = UDim2.new(1, 0, 1, 0), Position = UDim2.new(0, 0, 0, 0),
 			BackgroundColor3 = BG, BorderSizePixel = 0, Active = true,
 		}, gui)
 		round(main, 8)
