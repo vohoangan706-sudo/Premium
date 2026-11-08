@@ -140,12 +140,13 @@ local function setupDataview()
 	end
 
 	---------------------------------------------------------------
-	-- windows (draggable, minimize, close, click to bring to front)
+	-- windows: every Dataview app fills the screen; "-" sends it to a
+	-- small dock at the bottom, tap its chip to bring it back
 	---------------------------------------------------------------
 	local gui = nil
+	local dock = nil
 	local windows = {}
 	local zCounter = 10
-	local drag = nil
 
 	local function getGui()
 		if gui and gui.Parent then return gui end
@@ -153,73 +154,79 @@ local function setupDataview()
 		return gui
 	end
 
+	local function getDock()
+		getGui()
+		if dock and dock.Parent then return dock end
+		dock = make("Frame", {
+			Name = "Dock", Size = UDim2.new(0, 0, 0, 30), AutomaticSize = Enum.AutomaticSize.X,
+			AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -6),
+			BackgroundTransparency = 1, ZIndex = 100000, Visible = false,
+		}, gui)
+		make("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }, dock)
+		return dock
+	end
+
+	local function updateDock()
+		if not (dock and dock.Parent) then return end
+		local count = 0
+		for _, child in ipairs(dock:GetChildren()) do
+			if child:IsA("TextButton") then count = count + 1 end
+		end
+		dock.Visible = count > 0
+	end
+
 	local function front(win)
 		zCounter = zCounter + 1
 		win.frame.ZIndex = zCounter
 	end
 
-	local function createWindow(key, title, width, height)
-		local count = 0
-		for _ in pairs(windows) do count = count + 1 end
-
+	local function createWindow(key, title)
 		local frame = make("Frame", {
-			Name = key, Size = UDim2.new(width, 0, height, 0),
-			Position = UDim2.new((1 - width) / 2, count * 18, (1 - height) / 2, count * 18),
-			BackgroundColor3 = BG, BorderSizePixel = 0, Active = true,
+			Name = key, Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = BG, BorderSizePixel = 0, Active = true,
 		}, getGui())
-		round(frame, 8)
 		make("UIStroke", { Color = EDGE, Thickness = 1.5 }, frame)
 
-		local bar = make("Frame", { Size = UDim2.new(1, 0, 0, 28), BackgroundColor3 = Color3.fromRGB(40, 30, 0), BorderSizePixel = 0, Active = true }, frame)
-		round(bar, 8)
-		makeLabel(bar, title, UDim2.new(1, -70, 1, 0), UDim2.new(0, 10, 0, 0), EDGE, 14)
+		local bar = make("Frame", { Size = UDim2.new(1, 0, 0, 30), BackgroundColor3 = Color3.fromRGB(40, 30, 0), BorderSizePixel = 0, Active = true }, frame)
+		makeLabel(bar, title, UDim2.new(1, -80, 1, 0), UDim2.new(0, 10, 0, 0), EDGE, 14)
 
-		local minButton = makeButton(bar, "-", { Size = UDim2.new(0, 24, 0, 20), AutomaticSize = Enum.AutomaticSize.None })
-		minButton.Position = UDim2.new(1, -56, 0, 4)
-		local closeButton = makeButton(bar, "X", { Size = UDim2.new(0, 24, 0, 20), AutomaticSize = Enum.AutomaticSize.None, Color = Color3.fromRGB(110, 35, 10) })
-		closeButton.Position = UDim2.new(1, -28, 0, 4)
+		local minButton = makeButton(bar, "-", { Size = UDim2.new(0, 28, 0, 22), AutomaticSize = Enum.AutomaticSize.None })
+		minButton.Position = UDim2.new(1, -66, 0, 4)
+		local closeButton = makeButton(bar, "X", { Size = UDim2.new(0, 28, 0, 22), AutomaticSize = Enum.AutomaticSize.None, Color = Color3.fromRGB(110, 35, 10) })
+		closeButton.Position = UDim2.new(1, -34, 0, 4)
 
-		local body = make("Frame", { Size = UDim2.new(1, 0, 1, -28), Position = UDim2.new(0, 0, 0, 28), BackgroundTransparency = 1 }, frame)
+		local body = make("Frame", { Size = UDim2.new(1, 0, 1, -30), Position = UDim2.new(0, 0, 0, 30), BackgroundTransparency = 1 }, frame)
 
-		local win = { frame = frame, body = body, key = key }
+		local win = { frame = frame, body = body, key = key, chip = nil }
 		windows[key] = win
 		front(win)
 
-		bar.InputBegan:Connect(function(input)
-			if isPress(input) then
-				front(win)
-				drag = { frame = frame, start = input.Position, pos = frame.Position }
-			end
-		end)
 		frame.InputBegan:Connect(function(input)
 			if isPress(input) then front(win) end
 		end)
 
-		local collapsed = false
 		minButton.MouseButton1Click:Connect(function()
-			collapsed = not collapsed
-			body.Visible = not collapsed
-			frame.Size = collapsed and UDim2.new(width, 0, 0, 28) or UDim2.new(width, 0, height, 0)
+			frame.Visible = false
+			if win.chip then win.chip:Destroy() end
+			win.chip = makeButton(getDock(), title, { Color = FIELD_ON })
+			win.chip.MouseButton1Click:Connect(function()
+				win.chip:Destroy()
+				win.chip = nil
+				frame.Visible = true
+				front(win)
+				updateDock()
+			end)
+			updateDock()
 		end)
 
 		function win.close()
 			windows[key] = nil
+			if win.chip then win.chip:Destroy() end
 			frame:Destroy()
+			updateDock()
 		end
 		closeButton.MouseButton1Click:Connect(win.close)
 		return win
 	end
-
-	UserInputService.InputChanged:Connect(function(input)
-		if drag and drag.frame.Parent and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-			local dx = input.Position.X - drag.start.X
-			local dy = input.Position.Y - drag.start.Y
-			drag.frame.Position = UDim2.new(drag.pos.X.Scale, drag.pos.X.Offset + dx, drag.pos.Y.Scale, drag.pos.Y.Offset + dy)
-		end
-	end)
-	UserInputService.InputEnded:Connect(function(input)
-		if drag and isPress(input) then drag = nil end
-	end)
 
 	local function closeAll()
 		local list = {}
@@ -232,7 +239,7 @@ local function setupDataview()
 	---------------------------------------------------------------
 	local function openScripthub()
 		if windows.scripthub then front(windows.scripthub) return end
-		local win = createWindow("scripthub", "Dataview - Scripthub", 0.76, 0.8)
+		local win = createWindow("scripthub", "Dataview - Scripthub")
 		local body = win.body
 		local scripts = settings.scripts
 		local current = nil
@@ -450,14 +457,148 @@ local function setupDataview()
 		return out
 	end
 
-	local ROOTS = {
-		{ "Workspace", function() return workspace end },
-		{ "Players", function() return game:GetService("Players") end },
-		{ "ReplicatedStorage", function() return game:GetService("ReplicatedStorage") end },
-		{ "Lighting", function() return game:GetService("Lighting") end },
-		{ "StarterGui", function() return game:GetService("StarterGui") end },
-		{ "PlayerGui", function() return PlayerGui end },
-		{ "game", function() return game end },
+	-- class icons: a small coloured tag with letters, so RemoteEvents,
+	-- scripts, parts, GUIs and so on are easy to tell apart at a glance
+	local ICON_BY_CLASS = {
+		RemoteEvent = { "RE", Color3.fromRGB(235, 110, 40) },
+		UnreliableRemoteEvent = { "UR", Color3.fromRGB(235, 140, 60) },
+		RemoteFunction = { "RF", Color3.fromRGB(190, 90, 220) },
+		BindableEvent = { "BE", Color3.fromRGB(215, 170, 60) },
+		BindableFunction = { "BF", Color3.fromRGB(170, 140, 60) },
+		LocalScript = { "LS", Color3.fromRGB(90, 200, 120) },
+		ModuleScript = { "MS", Color3.fromRGB(60, 170, 170) },
+		Script = { "S", Color3.fromRGB(70, 160, 90) },
+		Folder = { "Fo", Color3.fromRGB(190, 160, 90) },
+		Configuration = { "Cf", Color3.fromRGB(170, 150, 110) },
+		Model = { "Md", Color3.fromRGB(90, 140, 230) },
+		MeshPart = { "Mp", Color3.fromRGB(110, 130, 190) },
+		Humanoid = { "Hu", Color3.fromRGB(230, 120, 120) },
+		Animation = { "An", Color3.fromRGB(200, 100, 160) },
+		Sound = { "Sn", Color3.fromRGB(120, 200, 230) },
+		Camera = { "Cm", Color3.fromRGB(150, 150, 150) },
+		Player = { "Pl", Color3.fromRGB(230, 200, 90) },
+		Tool = { "Tl", Color3.fromRGB(210, 130, 70) },
+		Accessory = { "Ac", Color3.fromRGB(190, 110, 150) },
+		Terrain = { "Tr", Color3.fromRGB(110, 170, 90) },
+		Attachment = { "At", Color3.fromRGB(150, 150, 190) },
+		ParticleEmitter = { "Pe", Color3.fromRGB(230, 160, 220) },
+		Decal = { "Dc", Color3.fromRGB(170, 170, 120) },
+		Texture = { "Tx", Color3.fromRGB(170, 170, 120) },
+		Sky = { "Sk", Color3.fromRGB(130, 190, 240) },
+	}
+	local REMOTE_CLASSES = { RemoteEvent = true, UnreliableRemoteEvent = true, RemoteFunction = true, BindableEvent = true, BindableFunction = true }
+
+	local function iconFor(inst)
+		local info = ICON_BY_CLASS[inst.ClassName]
+		if info then return info[1], info[2] end
+		local function is(class)
+			local ok, result = pcall(inst.IsA, inst, class)
+			return ok and result
+		end
+		if is("LuaSourceContainer") then return "S", Color3.fromRGB(70, 160, 90) end
+		if is("BasePart") then return "P", Color3.fromRGB(120, 150, 200) end
+		if is("LayerCollector") then return "UI", Color3.fromRGB(100, 190, 230) end
+		if is("GuiObject") then return "Gu", Color3.fromRGB(90, 170, 210) end
+		if is("ValueBase") then return "V", Color3.fromRGB(200, 190, 110) end
+		if is("Constraint") then return "Cn", Color3.fromRGB(160, 140, 200) end
+		if is("JointInstance") then return "Jn", Color3.fromRGB(160, 140, 200) end
+		if is("Light") then return "Lt", Color3.fromRGB(240, 220, 120) end
+		if inst.Parent == game then return "Sv", Color3.fromRGB(200, 170, 80) end
+		return "?", Color3.fromRGB(110, 110, 110)
+	end
+
+	local function makeIcon(parent, inst, position)
+		local text, color = iconFor(inst)
+		local icon = make("Frame", { Size = UDim2.new(0, 24, 0, 16), Position = position, BackgroundColor3 = color, BorderSizePixel = 0 }, parent)
+		round(icon, 3)
+		make("TextLabel", {
+			Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = text, TextSize = 10,
+			Font = Enum.Font.Code, TextColor3 = Color3.fromRGB(15, 15, 15),
+		}, icon)
+		return icon
+	end
+
+	local function instRoot(label, getInst)
+		return {
+			label = label,
+			children = function()
+				local ok, list = pcall(function() return getInst():GetChildren() end)
+				return ok and list or {}
+			end,
+			descendants = function()
+				local ok, list = pcall(function() return getInst():GetDescendants() end)
+				return ok and list or {}
+			end,
+		}
+	end
+
+	local function listRoot(label, getList)
+		local function safe()
+			local ok, list = pcall(getList)
+			return (ok and type(list) == "table") and list or {}
+		end
+		return { label = label, children = safe, descendants = safe }
+	end
+
+	local ROOTS = {}
+	do
+		local everything = {
+			label = "Everything",
+			children = function()
+				local out = {}
+				for _, inst in ipairs(game:GetChildren()) do table.insert(out, inst) end
+				if type(getnilinstances) == "function" then
+					local ok, nils = pcall(getnilinstances)
+					if ok and type(nils) == "table" then
+						for _, inst in ipairs(nils) do table.insert(out, inst) end
+					end
+				end
+				return out
+			end,
+			descendants = function()
+				local out = {}
+				local ok, all = pcall(function() return game:GetDescendants() end)
+				if ok then
+					for _, inst in ipairs(all) do table.insert(out, inst) end
+				end
+				if type(getnilinstances) == "function" then
+					local ok2, nils = pcall(getnilinstances)
+					if ok2 and type(nils) == "table" then
+						for _, inst in ipairs(nils) do
+							table.insert(out, inst)
+							local ok3, below = pcall(inst.GetDescendants, inst)
+							if ok3 then
+								for _, child in ipairs(below) do table.insert(out, child) end
+							end
+						end
+					end
+				end
+				return out
+			end,
+		}
+		table.insert(ROOTS, everything)
+		table.insert(ROOTS, instRoot("Game (services)", function() return game end))
+		for _, name in ipairs({ "Workspace", "Players", "ReplicatedStorage", "ReplicatedFirst", "Lighting", "StarterGui", "StarterPack", "StarterPlayer", "SoundService", "Teams", "Chat", "CoreGui" }) do
+			table.insert(ROOTS, instRoot(name, function() return game:GetService(name) end))
+		end
+		table.insert(ROOTS, instRoot("PlayerGui", function() return PlayerGui end))
+		table.insert(ROOTS, instRoot("My Character", function() return player.Character end))
+		if type(getnilinstances) == "function" then table.insert(ROOTS, listRoot("Nil instances", getnilinstances)) end
+		if type(getloadedmodules) == "function" then table.insert(ROOTS, listRoot("Loaded modules", getloadedmodules)) end
+		if type(getscripts) == "function" then table.insert(ROOTS, listRoot("All scripts", getscripts)) end
+	end
+
+	local FILTERS = {
+		{ "All", nil },
+		{ "Remotes", function(i) return REMOTE_CLASSES[i.ClassName] == true end },
+		{ "Scripts", function(i) return i:IsA("LuaSourceContainer") end },
+		{ "GUI", function(i) return i:IsA("GuiObject") or i:IsA("LayerCollector") end },
+		{ "Parts", function(i) return i:IsA("BasePart") end },
+		{ "Models", function(i) return i:IsA("Model") end },
+		{ "Values", function(i) return i:IsA("ValueBase") end },
+		{ "Sounds", function(i) return i:IsA("Sound") end },
+		{ "Animations", function(i) return i:IsA("Animation") end },
+		{ "Players", function(i) return i:IsA("Player") or i:IsA("Humanoid") end },
 	}
 
 	-- properties tried on whatever you select; only the ones that exist show up
@@ -472,22 +613,29 @@ local function setupDataview()
 
 	local function openExplorer()
 		if windows.explorer then front(windows.explorer) return end
-		local win = createWindow("explorer", "Dataview - Explorer", 0.82, 0.82)
+		local win = createWindow("explorer", "Dataview - Explorer")
 		local body = win.body
+		local CollectionService = game:GetService("CollectionService")
 
 		local rootIndex = 1
+		local filterIndex = 1
 		local expanded = {}
 		local selectedInst = nil
-		local MAX_ROWS = 400
-		local MAX_KIDS = 150
+		local MAX_ROWS = 600
+		local MAX_KIDS = 200
+		local MAX_RESULTS = 500
+		local searchToken = 0
 
-		-- left: tree
+		-- left: tree / results
 		local left = makePanel(body, UDim2.new(0.52, -6, 1, -8), UDim2.new(0, 4, 0, 4))
-		local rootButton = makeButton(left, ROOTS[1][1], { Size = UDim2.new(0.42, -8, 0, 24), AutomaticSize = Enum.AutomaticSize.None, TextSize = 12 })
+		local rootButton = makeButton(left, "Root: " .. ROOTS[1].label, { Size = UDim2.new(0.5, -8, 0, 24), AutomaticSize = Enum.AutomaticSize.None, TextSize = 12 })
 		rootButton.Position = UDim2.new(0, 6, 0, 6)
-		local searchBox = makeBox(left, UDim2.new(0.58, -8, 0, 24), UDim2.new(0.42, 2, 0, 6), "")
-		searchBox.PlaceholderText = "Search names..."
-		local treeScroll = makeScroll(left, UDim2.new(1, -8, 1, -62), UDim2.new(0, 4, 0, 34), Enum.AutomaticSize.XY)
+		rootButton.TextTruncate = Enum.TextTruncate.AtEnd
+		local filterButton = makeButton(left, "Show: All", { Size = UDim2.new(0.5, -8, 0, 24), AutomaticSize = Enum.AutomaticSize.None, TextSize = 12 })
+		filterButton.Position = UDim2.new(0.5, 2, 0, 6)
+		local searchBox = makeBox(left, UDim2.new(1, -12, 0, 24), UDim2.new(0, 6, 0, 34), "")
+		searchBox.PlaceholderText = "Search names or class (RemoteEvent, Part...)"
+		local treeScroll = makeScroll(left, UDim2.new(1, -8, 1, -92), UDim2.new(0, 4, 0, 62), Enum.AutomaticSize.XY)
 		treeScroll.ScrollingDirection = Enum.ScrollingDirection.XY
 		make("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }, treeScroll)
 		local treeStatus = makeLabel(left, "", UDim2.new(1, -12, 0, 18), UDim2.new(0, 6, 1, -22), DIM, 11)
@@ -543,42 +691,56 @@ local function setupDataview()
 			rebuildTree()
 		end
 
+		local function passes(inst, query)
+			local filter = FILTERS[filterIndex][2]
+			if filter then
+				local ok, result = pcall(filter, inst)
+				if not (ok and result) then return false end
+			end
+			if query == "" then return true end
+			local okName, name = pcall(function() return inst.Name:lower() end)
+			if okName and name:find(query, 1, true) then return true end
+			local okClass, class = pcall(function() return inst.ClassName:lower() end)
+			return okClass and class:find(query, 1, true) ~= nil
+		end
+
 		rebuildTree = function()
 			for _, child in ipairs(treeScroll:GetChildren()) do
 				if not child:IsA("UIListLayout") then child:Destroy() end
 			end
-			local root = ROOTS[rootIndex][2]()
+			local root = ROOTS[rootIndex]
 			local rows = {}
 			local query = searchBox.Text:lower()
-			if query ~= "" then
-				local ok, all = pcall(root.GetDescendants, root)
-				if ok then
-					for _, inst in ipairs(all) do
-						if inst.Name:lower():find(query, 1, true) then
-							table.insert(rows, { inst = inst, depth = 0, flat = true })
-							if #rows >= 200 then break end
-						end
-					end
-				end
-				treeStatus.Text = #rows .. " match(es)" .. (#rows >= 200 and " (showing the first 200)" or "")
-			else
-				local ok, kids = pcall(root.GetChildren, root)
-				if ok then
-					for index, kid in ipairs(kids) do
-						if index > MAX_KIDS then
-							table.insert(rows, { more = #kids - MAX_KIDS, depth = 0 })
+			local flat = query ~= "" or filterIndex > 1
+
+			if flat then
+				local capped = false
+				for _, inst in ipairs(root.descendants()) do
+					if passes(inst, query) then
+						table.insert(rows, { inst = inst, depth = 0, flat = true })
+						if #rows >= MAX_RESULTS then
+							capped = true
 							break
 						end
-						flatten(kid, 0, rows)
 					end
 				end
-				treeStatus.Text = ROOTS[rootIndex][1] .. ": " .. #rows .. " row(s) shown"
+				treeStatus.Text = #rows .. " result(s) in " .. root.label .. (capped and (" (first " .. MAX_RESULTS .. ")") or "")
+			else
+				local kids = root.children()
+				for index, kid in ipairs(kids) do
+					if index > MAX_KIDS then
+						table.insert(rows, { more = #kids - MAX_KIDS, depth = 0 })
+						break
+					end
+					flatten(kid, 0, rows)
+				end
+				treeStatus.Text = root.label .. ": " .. #kids .. " top-level, " .. #rows .. " row(s) shown"
 			end
 
 			for index, row in ipairs(rows) do
-				local line = make("Frame", { Size = UDim2.new(0, 560, 0, 22), BackgroundTransparency = 1, LayoutOrder = index }, treeScroll)
+				local line = make("Frame", { Size = UDim2.new(0, 620, 0, 22), BackgroundTransparency = 1, LayoutOrder = index }, treeScroll)
 				if row.more then
-					makeLabel(line, "... " .. row.more .. " more", UDim2.new(1, 0, 1, 0), UDim2.new(0, 10 + row.depth * 14, 0, 0), DIM, 12)
+					makeLabel(line, "... " .. row.more .. " more (use search)", UDim2.new(1, 0, 1, 0), UDim2.new(0, 10 + row.depth * 14, 0, 0), DIM, 12)
 				else
 					local inst = row.inst
 					local indent = row.depth * 14
@@ -592,11 +754,17 @@ local function setupDataview()
 							rebuildTree()
 						end)
 					end
+					makeIcon(line, inst, UDim2.new(0, indent + 24, 0, 3))
 					local isSelected = inst == selectedInst
+					local text = inst.Name .. "  [" .. inst.ClassName .. "]"
+					if row.flat then
+						local okParent, parentName = pcall(function() return inst.Parent and inst.Parent.Name or "nil" end)
+						text = text .. "  in " .. (okParent and parentName or "?")
+					end
 					local label = make("TextButton", {
-						Size = UDim2.new(0, 400, 1, 0), Position = UDim2.new(0, indent + 24, 0, 0),
+						Size = UDim2.new(1, -(indent + 52), 1, 0), Position = UDim2.new(0, indent + 52, 0, 0),
 						BackgroundColor3 = FIELD_ON, BackgroundTransparency = isSelected and 0 or 1, BorderSizePixel = 0,
-						Text = inst.Name .. "  [" .. inst.ClassName .. "]", TextColor3 = isSelected and TEXT or AMBER,
+						Text = text, TextColor3 = isSelected and TEXT or (REMOTE_CLASSES[inst.ClassName] and Color3.fromRGB(255, 150, 90) or AMBER),
 						Font = Enum.Font.Code, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
 					}, line)
 					label.MouseButton1Click:Connect(function() selectNode(inst) end)
@@ -604,11 +772,20 @@ local function setupDataview()
 			end
 		end
 
-		local function propRow(name, value, order, inst)
+		-- waits a moment after typing so big games don't stall on every key
+		local function scheduleRebuild()
+			searchToken = searchToken + 1
+			local token = searchToken
+			task.delay(0.45, function()
+				if token == searchToken and win.frame.Parent then rebuildTree() end
+			end)
+		end
+
+		local function propRow(name, value, order, inst, readOnly)
 			local row = make("Frame", { Size = UDim2.new(1, -6, 0, 24), BackgroundTransparency = 1, LayoutOrder = order }, propsScroll)
 			makeLabel(row, name, UDim2.new(0.38, -2, 1, 0), UDim2.new(0, 2, 0, 0), TEXT, 12)
 			local kind = type(value)
-			if name == "ClassName" or name == "Parent" or name == "Children" or (kind ~= "string" and kind ~= "number" and kind ~= "boolean") then
+			if readOnly or name == "ClassName" or name == "Parent" or (kind ~= "string" and kind ~= "number" and kind ~= "boolean") then
 				makeLabel(row, tostring(value), UDim2.new(0.62, -4, 1, 0), UDim2.new(0.38, 0, 0, 0), DIM, 12)
 			elseif kind == "boolean" then
 				local toggle = makeButton(row, tostring(value), {
@@ -663,21 +840,50 @@ local function setupDataview()
 					propRow(name, value, order, inst)
 				end
 			end
-			local ok, kids = pcall(inst.GetChildren, inst)
-			if ok then
+
+			-- extra info
+			local okKids, kids = pcall(inst.GetChildren, inst)
+			if okKids then
 				order = order + 1
-				propRow("Children", #kids, order, inst)
+				propRow("Children", #kids, order, inst, true)
+			end
+			local okDesc, descendants = pcall(inst.GetDescendants, inst)
+			if okDesc then
+				order = order + 1
+				propRow("Descendants", #descendants, order, inst, true)
+			end
+			local okAttr, attributes = pcall(inst.GetAttributes, inst)
+			if okAttr then
+				local list = {}
+				for key, value in pairs(attributes) do table.insert(list, key .. "=" .. tostring(value)) end
+				table.sort(list)
+				order = order + 1
+				propRow("Attributes", #list > 0 and table.concat(list, ", ") or "(none)", order, inst, true)
+			end
+			local okTags, tags = pcall(CollectionService.GetTags, CollectionService, inst)
+			if okTags then
+				order = order + 1
+				propRow("Tags", #tags > 0 and table.concat(tags, ", ") or "(none)", order, inst, true)
+			end
+			if REMOTE_CLASSES[inst.ClassName] then
+				order = order + 1
+				propRow("Note", "Remote/Bindable: copy its path to use it in your own scripts", order, inst, true)
 			end
 		end
 
 		rootButton.MouseButton1Click:Connect(function()
 			rootIndex = rootIndex % #ROOTS + 1
-			rootButton.Text = ROOTS[rootIndex][1]
+			rootButton.Text = "Root: " .. ROOTS[rootIndex].label
 			selectedInst = nil
 			refreshProps()
 			rebuildTree()
 		end)
-		searchBox:GetPropertyChangedSignal("Text"):Connect(rebuildTree)
+		filterButton.MouseButton1Click:Connect(function()
+			filterIndex = filterIndex % #FILTERS + 1
+			filterButton.Text = "Show: " .. FILTERS[filterIndex][1]
+			rebuildTree()
+		end)
+		searchBox:GetPropertyChangedSignal("Text"):Connect(scheduleRebuild)
 
 		copyPathButton.MouseButton1Click:Connect(function()
 			if not selectedInst then return end
@@ -742,7 +948,7 @@ local function setupDataview()
 	---------------------------------------------------------------
 	local function openNotes()
 		if windows.notes then front(windows.notes) return end
-		local win = createWindow("notes", "Dataview - Notes", 0.6, 0.72)
+		local win = createWindow("notes", "Dataview - Notes")
 		local body = win.body
 		local notes = settings.notes
 		local current = nil
