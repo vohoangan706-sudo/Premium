@@ -5,8 +5,11 @@
 
 if getgenv().GlueStop then pcall(getgenv().GlueStop) end
 
-local Players    = game:GetService("Players")
-local RunService = game:GetService("RunService")
+local Players             = game:GetService("Players")
+local RunService          = game:GetService("RunService")
+local UserInputService    = game:GetService("UserInputService")
+local GuiService          = game:GetService("GuiService")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 local localPlayer = Players.LocalPlayer
 
 getgenv().SelectedPlayers = getgenv().SelectedPlayers or {}   -- [UserId] = true
@@ -548,6 +551,178 @@ local function setVoidkill(on)
 end
 
 ------------------------------------------------------------------
+-- Auto hit: non-stop M1 + dash + skills 1-4, same as the farm panel. Only does anything while
+-- you are glued to someone (Glue pressed). Does not touch the target: just you attacking.
+------------------------------------------------------------------
+local AH_DASH_KEY   = Enum.KeyCode.Q
+local AH_DASH_EVERY = 2.5
+local AH_MOVE_EVERY = 0.6
+local AH_SLOTS      = { 1, 2, 3, 4 }
+local AH_M1_INTERVAL = 0.05
+local AH_M1_EXEC     = true          -- also call the executor's mouse1click if it has one
+local AH_FORCE_MOBILE = false
+local AH_BUTTON_NAME  = ""           -- exact M1 button name, if auto-detect picks the wrong one
+
+local SLOT_KEYS = { Enum.KeyCode.One, Enum.KeyCode.Two, Enum.KeyCode.Three, Enum.KeyCode.Four }
+
+local function ahPressKey(code)
+	pcall(function()
+		VirtualInputManager:SendKeyEvent(true, code, false, game)
+		task.wait(0.05)
+		VirtualInputManager:SendKeyEvent(false, code, false, game)
+	end)
+end
+
+-- a hotbar slot shows a "Cooldown" child under Base while it is cooling down
+local function ahMoveReady(slot)
+	local ok, ready = pcall(function()
+		local base = localPlayer.PlayerGui.Hotbar.Backpack.Hotbar[tostring(slot)].Base
+		return base:FindFirstChild("Cooldown") == nil
+	end)
+	if ok then return ready end
+	return true   -- hotbar not found: just try it
+end
+
+local AH_IS_MOBILE = (UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled) or AH_FORCE_MOBILE
+
+local ahM1Button, ahM1LastScan, ahM1Warned, ahM1Logged = nil, 0, false, nil
+
+local function ahLooksLikeM1(btn)
+	local name = btn.Name:lower()
+	local text = (btn:IsA("TextButton") and btn.Text or ""):lower()
+	if AH_BUTTON_NAME ~= "" then return btn.Name == AH_BUTTON_NAME end
+	return name == "m1" or text == "m1"
+		or name:find("m1", 1, true) ~= nil
+		or name:find("attack", 1, true) ~= nil
+		or name:find("punch", 1, true) ~= nil
+		or name:find("lmb", 1, true) ~= nil
+		or name:find("click", 1, true) ~= nil
+end
+
+local function ahFindM1Button()
+	if ahM1Button and ahM1Button.Parent then return ahM1Button end
+	ahM1Button = nil
+	if tick() - ahM1LastScan < 1 then return nil end   -- at most once a second
+	ahM1LastScan = tick()
+
+	local pg = localPlayer:FindFirstChild("PlayerGui")
+	if not pg then return nil end
+
+	local best, found = nil, 0
+	for _, d in ipairs(pg:GetDescendants()) do
+		if d:IsA("GuiButton") and ahLooksLikeM1(d) then
+			found += 1
+			if d.Name:lower() == "m1" then best = d end
+			best = best or d
+		end
+	end
+
+	if best then
+		ahM1Button = best
+		if ahM1Logged ~= best then
+			ahM1Logged = best
+			warn("[Attractor] Auto hit M1 button: " .. best:GetFullName() .. "  (" .. found .. " candidate(s))")
+		end
+	elseif not ahM1Warned then
+		ahM1Warned = true
+		warn("[Attractor] Auto hit: no M1 button found in PlayerGui - set AH_BUTTON_NAME")
+	end
+	return ahM1Button
+end
+
+local function ahActivateButton(btn)
+	local fs = rawget(getgenv(), "firesignal")
+	if type(fs) == "function" then
+		for _, sig in ipairs({ "MouseButton1Down", "MouseButton1Click", "Activated", "MouseButton1Up" }) do
+			pcall(function() fs(btn[sig]) end)
+		end
+	end
+	local gc = rawget(getgenv(), "getconnections")
+	if type(gc) == "function" then
+		for _, sig in ipairs({ "Activated", "MouseButton1Click", "MouseButton1Down" }) do
+			pcall(function()
+				for _, c in ipairs(gc(btn[sig])) do pcall(function() c:Fire() end) end
+			end)
+		end
+	end
+	if not fs and not gc then
+		pcall(function()
+			local inset = GuiService:GetGuiInset()
+			local sg = btn:FindFirstAncestorOfClass("ScreenGui")
+			local dy = (sg and sg.IgnoreGuiInset) and 0 or inset.Y
+			local c = btn.AbsolutePosition + btn.AbsoluteSize / 2
+			VirtualInputManager:SendTouchEvent(1, 0, c.X, c.Y + dy)
+			task.wait(0.03)
+			VirtualInputManager:SendTouchEvent(1, 2, c.X, c.Y + dy)
+		end)
+	end
+end
+
+local function ahClick()
+	if AH_IS_MOBILE then
+		local btn = ahFindM1Button()
+		if btn then ahActivateButton(btn) end
+		return
+	end
+
+	local cam = workspace.CurrentCamera
+	local size = cam and cam.ViewportSize or Vector2.new(800, 600)
+	local x, y = size.X / 2, size.Y / 2
+
+	pcall(function()
+		VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, game, 0)
+		task.wait(0.03)
+		VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, game, 0)
+	end)
+
+	if AH_M1_EXEC then
+		local fn = rawget(getgenv(), "mouse1click")
+		if type(fn) == "function" then pcall(fn) end
+	end
+end
+
+local autoHitOn = false
+local autoHitRunning = false
+
+local function autoHitLoop()
+	if autoHitRunning then return end
+	autoHitRunning = true
+	local lastDash, lastMove, lastM1, moveIdx = 0, 0, 0, 1
+
+	while autoHitOn do
+		if active then   -- only while glued to someone
+			if tick() - lastM1 >= AH_M1_INTERVAL then
+				lastM1 = tick()
+				task.spawn(ahClick)
+			end
+			if tick() - lastDash >= AH_DASH_EVERY then
+				lastDash = tick()
+				task.spawn(ahPressKey, AH_DASH_KEY)
+			end
+			if tick() - lastMove >= AH_MOVE_EVERY then
+				lastMove = tick()
+				for _ = 1, #AH_SLOTS do
+					local slot = AH_SLOTS[moveIdx]
+					moveIdx = moveIdx % #AH_SLOTS + 1
+					if ahMoveReady(slot) then
+						task.spawn(ahPressKey, SLOT_KEYS[slot])
+						break
+					end
+				end
+			end
+		end
+		task.wait(0.03)
+	end
+	autoHitRunning = false
+end
+
+local function setAutoHit(on)
+	if on == autoHitOn then return end
+	autoHitOn = on
+	if on then task.spawn(autoHitLoop) end
+end
+
+------------------------------------------------------------------
 -- panel (black + gold)
 ------------------------------------------------------------------
 local BG       = Color3.fromRGB(12, 12, 12)
@@ -572,8 +747,8 @@ local function round(obj, r)
 end
 
 local main = Instance.new("Frame")
-main.Size = UDim2.new(0, 270, 0, 256)
-main.Position = UDim2.new(0.5, -135, 0.5, -128)
+main.Size = UDim2.new(0, 270, 0, 290)
+main.Position = UDim2.new(0.5, -135, 0.5, -145)
 main.BackgroundColor3 = BG
 main.BorderSizePixel = 0
 main.Active = true
@@ -664,6 +839,8 @@ local invisBtn    = mkButton("", false, 132)
 local spectateBtn = mkButton("", true,  132)
 local voidBtn     = mkButton("", false, 168)
 local vkBtn       = mkButton("", true,  168)
+local autoHitBtn  = mkButton("", false, 202)
+autoHitBtn.Size = UDim2.new(1, -24, 0, 30)
 
 local function paintGlue(on)
 	glueBtn.BackgroundColor3 = on and FILL_ON or FILL
@@ -674,10 +851,11 @@ paintToggle(invisBtn, "Invisible", invisOn)
 paintToggle(spectateBtn, "Spectate", spectateOn)
 paintToggle(voidBtn, "Antivoid", voidOn)
 paintToggle(vkBtn, "Voidkill", voidkillOn)
+paintToggle(autoHitBtn, "Auto hit", autoHitOn)
 
-local status = Instance.new("TextLabel")
+local statuslocal status = Instance.new("TextLabel")
 status.Size = UDim2.new(1, -24, 0, 42)
-status.Position = UDim2.new(0, 12, 0, 208)
+status.Position = UDim2.new(0, 12, 0, 242)
 status.BackgroundTransparency = 1
 status.Font = FONT
 status.TextSize = 12
@@ -747,6 +925,11 @@ vkBtn.MouseButton1Click:Connect(function()
 	paintToggle(voidBtn, "Antivoid", voidOn)
 end)
 
+autoHitBtn.MouseButton1Click:Connect(function()
+	setAutoHit(not autoHitOn)
+	paintToggle(autoHitBtn, "Auto hit", autoHitOn)
+end)
+
 closeBtn.MouseButton1Click:Connect(function()
 	if getgenv().GlueStop then getgenv().GlueStop() end
 end)
@@ -754,6 +937,7 @@ end)
 getgenv().GlueStop = function()
 	if whitelistConn then whitelistConn:Disconnect() end
 	stop()
+	setAutoHit(false)
 	setInvisible(false)
 	setVoidkill(false)
 	setAntivoid(false)
