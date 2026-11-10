@@ -723,6 +723,91 @@ local function setAutoHit(on)
 end
 
 ------------------------------------------------------------------
+-- Auto farm: hop between non-friend players, attacking (Auto hit) each one until they are
+-- confirmed dead, then move to the next. Never targets a friend. A 60s per-target safety limit
+-- stops it getting stuck forever if death can't be confirmed (e.g. they leave mid-fight).
+------------------------------------------------------------------
+local autoFarmOn = false
+local autoFarmRunning = false
+local farmTargetId = nil
+local FARM_TIMEOUT = 60
+
+local function pickFarmTarget()
+	local list = {}
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= localPlayer and not isWhitelisted(p) and p.UserId ~= farmTargetId then
+			local c = p.Character
+			local h = c and c:FindFirstChildOfClass("Humanoid")
+			local r = c and c:FindFirstChild("HumanoidRootPart")
+			if h and r and h.Health > 0 then
+				table.insert(list, p)
+			end
+		end
+	end
+	if #list == 0 then return nil end
+	return list[math.random(#list)]
+end
+
+local function autoFarmLoop()
+	if autoFarmRunning then return end
+	autoFarmRunning = true
+	local hadAutoHit = autoHitOn
+	setAutoHit(true)   -- auto farm always attacks, even if the Auto hit button was off
+
+	while autoFarmOn do
+		local target = pickFarmTarget()
+		if not target then
+			farmTargetId = nil
+			setState("Auto farm: no targets, waiting...")
+			task.wait(1)
+		else
+			farmTargetId = target.UserId
+			Selected[target.UserId] = true
+			start(target)
+			setState("Auto farm: attacking " .. target.DisplayName)
+
+			local confirmed = false
+			local conns = {}
+			local char = target.Character
+			local hum = char and char:FindFirstChildOfClass("Humanoid")
+			if hum then
+				table.insert(conns, hum.Died:Connect(function() confirmed = true end))
+			end
+			table.insert(conns, target.CharacterAdded:Connect(function() confirmed = true end))   -- respawn = they died
+
+			local t0 = tick()
+			while autoFarmOn and not confirmed do
+				if not target.Parent then confirmed = true break end   -- left the server
+				local h2 = target.Character and target.Character:FindFirstChildOfClass("Humanoid")
+				if h2 and h2.Health <= 0 then confirmed = true break end
+				if tick() - t0 > FARM_TIMEOUT then break end            -- safety: don't stick on one target forever
+				task.wait(0.1)
+			end
+			for _, c in ipairs(conns) do pcall(function() c:Disconnect() end) end
+
+			if confirmed then
+				setState("Auto farm: " .. target.DisplayName .. " confirmed dead, next target")
+			else
+				setState("Auto farm: gave up on " .. target.DisplayName .. ", next target")
+			end
+			stop()
+			task.wait(0.3)
+		end
+	end
+
+	stop()
+	if not hadAutoHit then setAutoHit(false) end
+	farmTargetId = nil
+	autoFarmRunning = false
+end
+
+local function setAutoFarm(on)
+	if on == autoFarmOn then return end
+	autoFarmOn = on
+	if on then task.spawn(autoFarmLoop) end
+end
+
+------------------------------------------------------------------
 -- panel (black + gold)
 ------------------------------------------------------------------
 local BG       = Color3.fromRGB(12, 12, 12)
@@ -747,8 +832,8 @@ local function round(obj, r)
 end
 
 local main = Instance.new("Frame")
-main.Size = UDim2.new(0, 270, 0, 290)
-main.Position = UDim2.new(0.5, -135, 0.5, -145)
+main.Size = UDim2.new(0, 270, 0, 326)
+main.Position = UDim2.new(0.5, -135, 0.5, -163)
 main.BackgroundColor3 = BG
 main.BorderSizePixel = 0
 main.Active = true
@@ -841,6 +926,8 @@ local voidBtn     = mkButton("", false, 168)
 local vkBtn       = mkButton("", true,  168)
 local autoHitBtn  = mkButton("", false, 202)
 autoHitBtn.Size = UDim2.new(1, -24, 0, 30)
+local autoFarmBtn = mkButton("", false, 238)
+autoFarmBtn.Size = UDim2.new(1, -24, 0, 30)
 
 local function paintGlue(on)
 	glueBtn.BackgroundColor3 = on and FILL_ON or FILL
@@ -852,10 +939,11 @@ paintToggle(spectateBtn, "Spectate", spectateOn)
 paintToggle(voidBtn, "Antivoid", voidOn)
 paintToggle(vkBtn, "Voidkill", voidkillOn)
 paintToggle(autoHitBtn, "Auto hit", autoHitOn)
+paintToggle(autoFarmBtn, "Auto farm", autoFarmOn)
 
-local statuslocal status = Instance.new("TextLabel")
+local status = Instance.new("TextLabel")
 status.Size = UDim2.new(1, -24, 0, 42)
-status.Position = UDim2.new(0, 12, 0, 242)
+status.Position = UDim2.new(0, 12, 0, 278)
 status.BackgroundTransparency = 1
 status.Font = FONT
 status.TextSize = 12
@@ -930,6 +1018,11 @@ autoHitBtn.MouseButton1Click:Connect(function()
 	paintToggle(autoHitBtn, "Auto hit", autoHitOn)
 end)
 
+autoFarmBtn.MouseButton1Click:Connect(function()
+	setAutoFarm(not autoFarmOn)
+	paintToggle(autoFarmBtn, "Auto farm", autoFarmOn)
+end)
+
 closeBtn.MouseButton1Click:Connect(function()
 	if getgenv().GlueStop then getgenv().GlueStop() end
 end)
@@ -937,6 +1030,7 @@ end)
 getgenv().GlueStop = function()
 	if whitelistConn then whitelistConn:Disconnect() end
 	stop()
+	setAutoFarm(false)
 	setAutoHit(false)
 	setInvisible(false)
 	setVoidkill(false)
