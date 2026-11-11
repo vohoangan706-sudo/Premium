@@ -3,8 +3,10 @@
   Tap players in the list to select them ("Selected: N", saved in getgenv().SelectedPlayers as [UserId] = true).
   Press "Suiryu void" and it runs the Twin Fangs void ONCE on the selected players:
     antivoid turns on  >  press 2 until Twin Fangs starts (needs your ult + the Purple character)  >
-    glue (PhysicsRepRootPart) to each selected player until their hit animation plays (max 0.4s each,
-    hard limit 1.85s from the start of Twin Fangs)  >  anchored at -501y for 3s  >  teleport to -501y.
+    glue (your own HumanoidRootPart is moved to GLUE_GAP studs from each target every Heartbeat -
+    no PhysicsRepRootPart trick, a plain CFrame set) to each selected player until their hit animation
+    plays (max 0.4s each, hard limit 1.85s from the start of Twin Fangs)  >  teleport YOURSELF to (0,0,0)
+    as a check that Twin Fangs is actually grabbing (not to move anyone else)  >  anchored at -503y for 3s.
   Press it again for another run. The x closes the panel and turns antivoid off.
 ]]
 
@@ -100,7 +102,9 @@ end
 ------------------------------------------------------------------
 -- Suiryu void = Twin Fangs void, once
 ------------------------------------------------------------------
-local VOID_Y = -501
+local VOID_Y = -503
+local CONFIRM_POS = Vector3.new(0, 0, 0)   -- teleported here after the grab, so everyone glued is visibly in front of you
+local GLUE_GAP = 3                          -- studs your own root is held from the target while glued
 local platform
 local function ensurePlatform()
 	if platform and platform.Parent then return end
@@ -164,12 +168,6 @@ local function suiryuVoid()
 		local beat
 		local function unlink()
 			if beat then beat:Disconnect() beat = nil end
-			setRep(r, nil)
-			if r.Parent then
-				r.CFrame = CFrame.new(r.Position)
-				zero(r)
-				pcall(function() h.AutoRotate = true end)
-			end
 		end
 
 		for i, target in ipairs(queue) do
@@ -180,16 +178,11 @@ local function suiryuVoid()
 				local per = math.clamp((hardEnd - tick()) / (#queue - i + 1), 0.05, 0.4)
 
 				if beat then beat:Disconnect() end
-				pcall(function() h.AutoRotate = false end)
-				r.CFrame = CFrame.new(0, 0, 5)
-				zero(r)
-				setRep(r, r)
-				setRep(r, tRoot)
 				beat = RunService.Heartbeat:Connect(function()
-					if not r.Parent or not tRoot.Parent then return end
-					r.CFrame = CFrame.new(0, 0, 5)
-					zero(r)
-					setRep(r, tRoot)
+					local rr = root(me.Character)
+					if not rr or not tRoot.Parent then return end
+					rr.CFrame = tRoot.CFrame * CFrame.new(0, 0, GLUE_GAP)   -- move YOUR root to GLUE_GAP studs from the target
+					zero(rr)
 				end)
 
 				local hit = false
@@ -204,9 +197,21 @@ local function suiryuVoid()
 		end
 		unlink()
 
-		-- let the 1.85s limit pass, then anchor at -501y for 3s
+		-- let the 1.85s limit pass, then teleport to (0,0,0) so everyone glued is visibly in front of you
 		while tick() < hardEnd and track.IsPlaying do task.wait() end
+		setStatus("Teleporting to (0,0,0) to check Twin Fangs is grabbing")
+		do
+			local rr = root(me.Character)
+			if rr then
+				rr.CFrame = CFrame.new(CONFIRM_POS)
+				zero(rr)
+			end
+		end
+		task.wait(0.2)
+
+		-- then anchored at -503y for 3s
 		setStatus("Anchored at " .. VOID_Y .. "y")
+		ensurePlatform()
 		local pose = RunService.Heartbeat:Connect(function()
 			local rr = root(me.Character)
 			if rr then
@@ -216,12 +221,6 @@ local function suiryuVoid()
 		end)
 		task.wait(3)
 		pose:Disconnect()
-
-		local rr = root(me.Character)
-		if rr then
-			rr.CFrame = CFrame.new(0, VOID_Y, 0)
-			zero(rr)
-		end
 		setStatus("Done")
 	end)
 
@@ -251,8 +250,8 @@ end
 local function round(obj, r) Instance.new("UICorner", obj).CornerRadius = UDim.new(0, r) end
 
 local main = Instance.new("Frame")
-main.Size = UDim2.new(0, 190, 0, 250)
-main.Position = UDim2.new(0, 12, 0.5, -125)
+main.Size = UDim2.new(0, 235, 0, 330)
+main.Position = UDim2.new(0, 12, 0.5, -165)
 main.BackgroundColor3 = BG
 main.BorderSizePixel = 0
 main.Active = true
@@ -263,35 +262,35 @@ local stroke = Instance.new("UIStroke")
 stroke.Color, stroke.Thickness, stroke.Parent = GOLD, 2, main
 
 local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, -44, 0, 22)
-title.Position = UDim2.new(0, 8, 0, 6)
+title.Size = UDim2.new(1, -52, 0, 24)
+title.Position = UDim2.new(0, 10, 0, 8)
 title.BackgroundTransparency = 1
-title.Font, title.TextSize, title.TextColor3 = FONT, 16, GOLD
+title.Font, title.TextSize, title.TextColor3 = FONT, 19, GOLD
 title.TextXAlignment = Enum.TextXAlignment.Left
 title.Text = "Void kill"
 title.Parent = main
 
 local closeBtn = Instance.new("TextButton")
-closeBtn.Size = UDim2.new(0, 24, 0, 22)
-closeBtn.Position = UDim2.new(1, -30, 0, 6)
+closeBtn.Size = UDim2.new(0, 28, 0, 24)
+closeBtn.Position = UDim2.new(1, -36, 0, 8)
 closeBtn.BackgroundColor3 = FILL
 closeBtn.BorderSizePixel = 0
-closeBtn.Font, closeBtn.TextSize, closeBtn.TextColor3, closeBtn.Text = FONT, 14, GOLD, "x"
+closeBtn.Font, closeBtn.TextSize, closeBtn.TextColor3, closeBtn.Text = FONT, 16, GOLD, "x"
 closeBtn.Parent = main
 round(closeBtn, 6)
 
 local selectedLabel = Instance.new("TextLabel")
-selectedLabel.Size = UDim2.new(1, -16, 0, 14)
-selectedLabel.Position = UDim2.new(0, 8, 0, 30)
+selectedLabel.Size = UDim2.new(1, -20, 0, 16)
+selectedLabel.Position = UDim2.new(0, 10, 0, 37)
 selectedLabel.BackgroundTransparency = 1
-selectedLabel.Font, selectedLabel.TextSize, selectedLabel.TextColor3 = FONT, 12, GOLD_DIM
+selectedLabel.Font, selectedLabel.TextSize, selectedLabel.TextColor3 = FONT, 13, GOLD_DIM
 selectedLabel.TextXAlignment = Enum.TextXAlignment.Left
 selectedLabel.Text = "Selected: 0"
 selectedLabel.Parent = main
 
 local list = Instance.new("ScrollingFrame")
-list.Size = UDim2.new(1, -16, 0, 130)
-list.Position = UDim2.new(0, 8, 0, 48)
+list.Size = UDim2.new(1, -20, 0, 190)
+list.Position = UDim2.new(0, 10, 0, 58)
 list.BackgroundColor3 = ROW
 list.BorderSizePixel = 0
 list.ScrollBarThickness = 3
@@ -306,19 +305,19 @@ layout.Padding = UDim.new(0, 2)
 layout.Parent = list
 
 local voidBtn = Instance.new("TextButton")
-voidBtn.Size = UDim2.new(1, -16, 0, 28)
-voidBtn.Position = UDim2.new(0, 8, 0, 184)
+voidBtn.Size = UDim2.new(1, -20, 0, 32)
+voidBtn.Position = UDim2.new(0, 10, 0, 256)
 voidBtn.BackgroundColor3 = FILL
 voidBtn.BorderSizePixel = 0
-voidBtn.Font, voidBtn.TextSize, voidBtn.TextColor3, voidBtn.Text = FONT, 13, GOLD, "Suiryu void"
+voidBtn.Font, voidBtn.TextSize, voidBtn.TextColor3, voidBtn.Text = FONT, 14, GOLD, "Suiryu void"
 voidBtn.Parent = main
 round(voidBtn, 6)
 
 local status = Instance.new("TextLabel")
-status.Size = UDim2.new(1, -16, 0, 30)
-status.Position = UDim2.new(0, 8, 0, 216)
+status.Size = UDim2.new(1, -20, 0, 34)
+status.Position = UDim2.new(0, 10, 0, 292)
 status.BackgroundTransparency = 1
-status.Font, status.TextSize, status.TextColor3 = FONT, 10, GOLD_DIM
+status.Font, status.TextSize, status.TextColor3 = FONT, 11, GOLD_DIM
 status.TextWrapped = true
 status.TextXAlignment, status.TextYAlignment = Enum.TextXAlignment.Left, Enum.TextYAlignment.Top
 status.Text = "Select players, then press Suiryu void"
@@ -344,10 +343,10 @@ end
 local function addRow(p)
 	if p == me or rows[p.UserId] then return end
 	local b = Instance.new("TextButton")
-	b.Size = UDim2.new(1, -4, 0, 26)
+	b.Size = UDim2.new(1, -4, 0, 32)
 	b.BackgroundColor3 = ROW
 	b.BorderSizePixel = 0
-	b.Font, b.TextSize, b.TextColor3 = FONT, 12, GOLD
+	b.Font, b.TextSize, b.TextColor3 = FONT, 14, GOLD
 	b.Text = p.Name
 	b.LayoutOrder = #rows + 1
 	b.Parent = list
