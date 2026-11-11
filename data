@@ -228,10 +228,148 @@ local function setupDataview()
 		return win
 	end
 
+	local stopPick = nil
+
 	local function closeAll()
+		if stopPick then stopPick() end
 		local list = {}
 		for _, win in pairs(windows) do table.insert(list, win) end
 		for _, win in ipairs(list) do win.close() end
+	end
+
+	---------------------------------------------------------------
+	-- PICK MODE: hides every ScreenGui (this panel included), shows a
+	-- blue box (mouse) or crosshair (touch); press anything to select it
+	---------------------------------------------------------------
+	local function startPick(onPicked)
+		if stopPick then stopPick() end
+
+		local hidden = {}
+		local function hide(g)
+			local ok, was = pcall(function() return g.Enabled end)
+			if ok and was then
+				table.insert(hidden, g)
+				pcall(function() g.Enabled = false end)
+			end
+		end
+		for _, child in ipairs(PlayerGui:GetChildren()) do
+			if child:IsA("ScreenGui") then hide(child) end
+		end
+		if context.screenGui and context.screenGui:IsA("ScreenGui") then hide(context.screenGui) end
+
+		local BLUE = Color3.fromRGB(60, 150, 255)
+		local isMobile = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+		local overlay = make("ScreenGui", {
+			Name = "AetherPick", ResetOnSpawn = false, DisplayOrder = 2000000, ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+		}, PlayerGui)
+
+		local capture = make("TextButton", {
+			Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, Text = "", AutoButtonColor = false, Active = true, ZIndex = 1,
+		}, overlay)
+
+		-- top bar: what is under the pointer + cancel
+		local topBar = make("Frame", {
+			Size = UDim2.new(1, -120, 0, 30), Position = UDim2.new(0, 60, 0, 6), BackgroundColor3 = BG,
+			BackgroundTransparency = 0.15, BorderSizePixel = 0, ZIndex = 5,
+		}, overlay)
+		round(topBar, 6)
+		make("UIStroke", { Color = BLUE, Thickness = 1.5 }, topBar)
+		local info = makeLabel(topBar, isMobile and "Drag the crosshair, lift to select" or "Click a part to select it (Esc cancels)", UDim2.new(1, -90, 1, 0), UDim2.new(0, 8, 0, 0), TEXT, 12)
+		info.ZIndex = 6
+		local cancelButton = makeButton(topBar, "Cancel", { Size = UDim2.new(0, 70, 0, 22), AutomaticSize = Enum.AutomaticSize.None, TextSize = 12, Color = Color3.fromRGB(110, 35, 10) })
+		cancelButton.Position = UDim2.new(1, -76, 0, 4)
+		cancelButton.ZIndex = 6
+
+		-- pointer: small blue box on PC, crosshair on touch
+		local pointer = make("Frame", {
+			Size = UDim2.new(0, 28, 0, 28), AnchorPoint = Vector2.new(0.5, 0.5), BackgroundTransparency = 1,
+			Position = UDim2.new(0.5, 0, 0.5, 0), ZIndex = 4,
+		}, overlay)
+		if isMobile then
+			local ring = make("Frame", { Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, ZIndex = 4 }, pointer)
+			round(ring, 14)
+			make("UIStroke", { Color = BLUE, Thickness = 2 }, ring)
+			make("Frame", { Size = UDim2.new(0, 2, 0, 44), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 0), BackgroundColor3 = BLUE, BorderSizePixel = 0, ZIndex = 4 }, pointer)
+			make("Frame", { Size = UDim2.new(0, 44, 0, 2), AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 0), BackgroundColor3 = BLUE, BorderSizePixel = 0, ZIndex = 4 }, pointer)
+		else
+			pointer.Size = UDim2.new(0, 16, 0, 16)
+			pointer.BackgroundTransparency = 0.7
+			pointer.BackgroundColor3 = BLUE
+			make("UIStroke", { Color = BLUE, Thickness = 2 }, pointer)
+		end
+
+		local box = make("SelectionBox", {
+			Color3 = BLUE, LineThickness = 0.05, SurfaceColor3 = BLUE, SurfaceTransparency = 0.8,
+		}, overlay)
+
+		local target = nil
+		local keyConnection = nil
+
+		local function targetAt(pos)
+			local camera = workspace.CurrentCamera
+			if not camera then return nil end
+			local ray = camera:ScreenPointToRay(pos.X, pos.Y)
+			local ok, result = pcall(function() return workspace:Raycast(ray.Origin, ray.Direction * 5000) end)
+			return ok and result and result.Instance or nil
+		end
+
+		local function moveTo(pos)
+			pointer.Position = UDim2.new(0, pos.X, 0, pos.Y)
+			target = targetAt(pos)
+			box.Adornee = target
+			if target then
+				info.Text = target.Name .. "  [" .. target.ClassName .. "]"
+			else
+				info.Text = "Nothing here"
+			end
+		end
+
+		local function stop()
+			stopPick = nil
+			if keyConnection then keyConnection:Disconnect() keyConnection = nil end
+			for _, g in ipairs(hidden) do
+				if g.Parent then pcall(function() g.Enabled = true end) end
+			end
+			overlay:Destroy()
+		end
+		stopPick = stop
+
+		local function finish(pos)
+			moveTo(pos)
+			local hit = target
+			if not hit then return end
+			stop()
+			onPicked(hit)
+		end
+
+		capture.InputChanged:Connect(function(input)
+			local kind = input.UserInputType
+			if kind == Enum.UserInputType.MouseMovement or kind == Enum.UserInputType.Touch then
+				moveTo(Vector2.new(input.Position.X, input.Position.Y))
+			end
+		end)
+		capture.InputBegan:Connect(function(input)
+			local kind = input.UserInputType
+			local pos = Vector2.new(input.Position.X, input.Position.Y)
+			if kind == Enum.UserInputType.Touch then
+				moveTo(pos)
+			elseif kind == Enum.UserInputType.MouseButton1 then
+				finish(pos)
+			end
+		end)
+		capture.InputEnded:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.Touch then
+				finish(Vector2.new(input.Position.X, input.Position.Y))
+			end
+		end)
+		cancelButton.MouseButton1Click:Connect(stop)
+		keyConnection = UserInputService.InputBegan:Connect(function(input, processed)
+			if input.KeyCode == Enum.KeyCode.Escape then stop() end
+		end)
+
+		-- start the pointer in the middle of the screen
+		local size = overlay.AbsoluteSize
+		moveTo(Vector2.new(size.X / 2, size.Y / 2))
 	end
 
 	---------------------------------------------------------------
@@ -648,6 +786,7 @@ local function setupDataview()
 		pathBox.TextSize = 11
 		local actionRow = make("Frame", { Size = UDim2.new(1, -12, 0, 26), Position = UDim2.new(0, 6, 0, 34), BackgroundTransparency = 1 }, right)
 		make("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4), VerticalAlignment = Enum.VerticalAlignment.Center }, actionRow)
+		local pickButton = makeButton(actionRow, "Pick", { Size = UDim2.new(0, 0, 0, 24), TextSize = 12, Color = Color3.fromRGB(30, 80, 160) })
 		local copyPathButton = makeButton(actionRow, "Copy path", { Size = UDim2.new(0, 0, 0, 24), TextSize = 12 })
 		local upButton = makeButton(actionRow, "Up", { Size = UDim2.new(0, 0, 0, 24), TextSize = 12 })
 		local gotoButton = makeButton(actionRow, "Go to", { Size = UDim2.new(0, 0, 0, 24), TextSize = 12 })
@@ -884,6 +1023,27 @@ local function setupDataview()
 			rebuildTree()
 		end)
 		searchBox:GetPropertyChangedSignal("Text"):Connect(scheduleRebuild)
+
+		pickButton.MouseButton1Click:Connect(function()
+			startPick(function(inst)
+				if not win.frame.Parent then return end
+				front(win)
+				searchBox.Text = ""
+				filterIndex = 1
+				filterButton.Text = "Show: All"
+				rootIndex = 1
+				rootButton.Text = "Root: " .. ROOTS[1].label
+				local parent = inst.Parent
+				while parent and parent ~= game do
+					expanded[parent] = true
+					parent = parent.Parent
+				end
+				selectedInst = inst
+				refreshProps()
+				rebuildTree()
+				setPropsStatus("Picked " .. inst.Name .. ".", GREEN)
+			end)
+		end)
 
 		copyPathButton.MouseButton1Click:Connect(function()
 			if not selectedInst then return end
