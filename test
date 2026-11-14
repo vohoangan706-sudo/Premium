@@ -5,9 +5,8 @@
     antivoid turns on  >  press 2 until Twin Fangs starts (needs your ult + the Purple character)  >
     glue (your own HumanoidRootPart orbit-sweeps GLUE_GAP studs around each target, super fast, every
     Heartbeat, re-aimed at their LIVE position every frame so it keeps up even while they run - no
-    PhysicsRepRootPart trick) to each selected player, 0.15s each (fast tween then orbit), ending early if their hit
-    animation plays, hard limit 1.85s total from the start of Twin Fangs  >  teleport YOURSELF to (0,0,0)
-    as a check that Twin Fangs is actually grabbing (not to move anyone else)  >  PhysicsRepRootPart at -505y for 3s.
+    PhysicsRepRootPart trick) to each selected player, 0.2s each (tween then orbit), ending early if their hit
+    animation plays, hard limit 2s total from the start of Twin Fangs  >  PhysicsRepRootPart at -505y for 3s.
   Press it again for another run. The x closes the panel and turns antivoid off.
 ]]
 
@@ -105,10 +104,9 @@ end
 -- Suiryu void = Twin Fangs void, once
 ------------------------------------------------------------------
 local VOID_Y = -505
-local CONFIRM_POS = Vector3.new(0, 0, 0)   -- teleported here after the grab, so everyone glued is visibly in front of you
 local GLUE_GAP = 3                          -- orbit radius (studs) around the target
-local PER_TARGET = 0.15                     -- window per target: tween first, orbit sweep for the rest
-local TWEEN_TIME = 0.02                     -- fastest tween (about one frame is the real floor)
+local PER_TARGET = 0.2                      -- window per target: tween first, orbit sweep for the rest
+local TWEEN_TIME = 0.1                      -- tween time per target (at least 0.1s)
 local ORBIT_SPEED = 30                      -- radians/second - how fast you sweep around them
 local platform
 local function ensurePlatform()
@@ -157,7 +155,7 @@ local function suiryuVoid()
 		if not track then setStatus("Twin Fangs did not start (ult ready? Purple?)") return end
 
 		local startedAt = tick()
-		local hardEnd = startedAt + 1.85
+		local hardEnd = startedAt + 2
 
 		-- selected players, shuffled
 		local queue = {}
@@ -183,7 +181,7 @@ local function suiryuVoid()
 				local per = math.min(PER_TARGET, hardEnd - tick())
 
 				stopOrbit()
-				local t0 = tick()   -- the 0.15s window covers tween + orbit
+				local t0 = tick()   -- the 0.2s window covers tween + orbit
 				-- 1) fastest tween onto the target
 				pcall(function()
 					local goal = tRoot.CFrame * CFrame.new(0, 0, GLUE_GAP)
@@ -222,17 +220,8 @@ local function suiryuVoid()
 		end
 		stopOrbit()
 
-		-- let the 1.85s limit pass, then teleport to (0,0,0) so everyone glued is visibly in front of you
+		-- let the 2s limit pass
 		while tick() < hardEnd and track.IsPlaying do task.wait() end
-		setStatus("Teleporting to (0,0,0) to check Twin Fangs is grabbing")
-		do
-			local rr = root(me.Character)
-			if rr then
-				rr.CFrame = CFrame.new(CONFIRM_POS)
-				zero(rr)
-			end
-		end
-		task.wait(0.2)
 
 		-- then PhysicsRepRootPart at -505y for 3s (not anchored)
 		setStatus("PhysicsRepRootPart at " .. VOID_Y .. "y")
