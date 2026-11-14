@@ -3,16 +3,18 @@
   Tap players in the list to select them ("Selected: N", saved in getgenv().SelectedPlayers as [UserId] = true).
   Press "Suiryu void" and it runs the Twin Fangs void ONCE on the selected players:
     antivoid turns on  >  press 2 until Twin Fangs starts (needs your ult + the Purple character)  >
-    glue (your own HumanoidRootPart is moved to GLUE_GAP studs from each target every Heartbeat -
-    no PhysicsRepRootPart trick, a plain CFrame set) to each selected player until their hit animation
-    plays (max 0.4s each, hard limit 1.85s from the start of Twin Fangs)  >  teleport YOURSELF to (0,0,0)
-    as a check that Twin Fangs is actually grabbing (not to move anyone else)  >  anchored at -503y for 3s.
+    glue (your own HumanoidRootPart orbit-sweeps GLUE_GAP studs around each target, super fast, every
+    Heartbeat, re-aimed at their LIVE position every frame so it keeps up even while they run - no
+    PhysicsRepRootPart trick) to each selected player, 0.15s each (fast tween then orbit), ending early if their hit
+    animation plays, hard limit 1.85s total from the start of Twin Fangs  >  teleport YOURSELF to (0,0,0)
+    as a check that Twin Fangs is actually grabbing (not to move anyone else)  >  PhysicsRepRootPart at -505y for 3s.
   Press it again for another run. The x closes the panel and turns antivoid off.
 ]]
 
 if getgenv().SuiryuVoidStop then pcall(getgenv().SuiryuVoidStop) end
 
-local Players    = game:GetService("Players")
+local Players       = game:GetService("Players")
+local TweenService  = game:GetService("TweenService")
 local RunService = game:GetService("RunService")
 local HttpService = game:GetService("HttpService")
 local VIM        = game:GetService("VirtualInputManager")
@@ -102,9 +104,12 @@ end
 ------------------------------------------------------------------
 -- Suiryu void = Twin Fangs void, once
 ------------------------------------------------------------------
-local VOID_Y = -503
+local VOID_Y = -505
 local CONFIRM_POS = Vector3.new(0, 0, 0)   -- teleported here after the grab, so everyone glued is visibly in front of you
-local GLUE_GAP = 3                          -- studs your own root is held from the target while glued
+local GLUE_GAP = 3                          -- orbit radius (studs) around the target
+local PER_TARGET = 0.15                     -- window per target: tween first, orbit sweep for the rest
+local TWEEN_TIME = 0.02                     -- fastest tween (about one frame is the real floor)
+local ORBIT_SPEED = 30                      -- radians/second - how fast you sweep around them
 local platform
 local function ensurePlatform()
 	if platform and platform.Parent then return end
@@ -166,7 +171,7 @@ local function suiryuVoid()
 		setStatus("Twin Fangs: " .. #queue .. " target(s)")
 
 		local beat
-		local function unlink()
+		local function stopOrbit()
 			if beat then beat:Disconnect() beat = nil end
 		end
 
@@ -175,13 +180,34 @@ local function suiryuVoid()
 			local tRoot, tHum = root(target.Character), hum(target.Character)
 			r = root(me.Character)
 			if tRoot and tHum and r then
-				local per = math.clamp((hardEnd - tick()) / (#queue - i + 1), 0.05, 0.4)
+				local per = math.min(PER_TARGET, hardEnd - tick())
 
-				if beat then beat:Disconnect() end
+				stopOrbit()
+				local t0 = tick()   -- the 0.15s window covers tween + orbit
+				-- 1) fastest tween onto the target
+				pcall(function()
+					local goal = tRoot.CFrame * CFrame.new(0, 0, GLUE_GAP)
+					local tw = TweenService:Create(r, TweenInfo.new(TWEEN_TIME, Enum.EasingStyle.Linear), {CFrame = goal})
+					tw:Play()
+					local tt = tick()
+					while tw.PlaybackState == Enum.PlaybackState.Playing and tick() - tt < TWEEN_TIME + 0.03 do RunService.Heartbeat:Wait() end
+					tw:Cancel()
+				end)
+				-- 2) orbit sweep for the rest of the window
+				local angle = 0
+				local lastT = tick()
 				beat = RunService.Heartbeat:Connect(function()
+					local now = tick()
+					local dt = now - lastT
+					lastT = now
+					angle += ORBIT_SPEED * dt
+
 					local rr = root(me.Character)
 					if not rr or not tRoot.Parent then return end
-					rr.CFrame = tRoot.CFrame * CFrame.new(0, 0, GLUE_GAP)   -- move YOUR root to GLUE_GAP studs from the target
+					local center = tRoot.Position           -- their LIVE position: keeps up even while they run
+					local offset = Vector3.new(math.cos(angle), 0, math.sin(angle)) * GLUE_GAP
+					local pos = center + offset
+					rr.CFrame = CFrame.new(pos, center)      -- also faces the target while sweeping around them
 					zero(rr)
 				end)
 
@@ -190,12 +216,11 @@ local function suiryuVoid()
 					local id = t.Animation.AnimationId
 					if id:match("18896222853") or id:match("137434257516014") then hit = true end
 				end)
-				local t0 = tick()
 				while not hit and tick() - t0 < per and tick() < hardEnd do RunService.Heartbeat:Wait() end
 				c2:Disconnect()
 			end
 		end
-		unlink()
+		stopOrbit()
 
 		-- let the 1.85s limit pass, then teleport to (0,0,0) so everyone glued is visibly in front of you
 		while tick() < hardEnd and track.IsPlaying do task.wait() end
@@ -209,18 +234,28 @@ local function suiryuVoid()
 		end
 		task.wait(0.2)
 
-		-- then anchored at -503y for 3s
-		setStatus("Anchored at " .. VOID_Y .. "y")
+		-- then PhysicsRepRootPart at -505y for 3s (not anchored)
+		setStatus("PhysicsRepRootPart at " .. VOID_Y .. "y")
 		ensurePlatform()
-		local pose = RunService.Heartbeat:Connect(function()
-			local rr = root(me.Character)
-			if rr then
-				zero(rr)
-				rr.CFrame = CFrame.new(0, VOID_Y, 0)
-			end
-		end)
+		local anchorPart = Instance.new("Part")
+		anchorPart.Name = "SuiryuRepPart"
+		anchorPart.Size = Vector3.new(4, 1, 4)
+		anchorPart.Anchored = true
+		anchorPart.CanCollide = false
+		anchorPart.Transparency = 1
+		anchorPart.CFrame = CFrame.new(0, VOID_Y, 0)
+		anchorPart.Parent = workspace
+		local rr = root(me.Character)
+		if rr then
+			rr.CFrame = CFrame.new(0, VOID_Y, 0)
+			zero(rr)
+			setRep(rr, rr)
+			setRep(rr, anchorPart)
+		end
 		task.wait(3)
-		pose:Disconnect()
+		rr = root(me.Character)
+		if rr then setRep(rr, nil) end
+		pcall(function() anchorPart:Destroy() end)
 		setStatus("Done")
 	end)
 
