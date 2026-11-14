@@ -5,7 +5,7 @@
     antivoid turns on  >  press 2 until Twin Fangs starts (needs your ult + the Purple character)  >
     glue (your own HumanoidRootPart orbit-sweeps GLUE_GAP studs around each target, super fast, every
     Heartbeat, re-aimed at their LIVE position every frame so it keeps up even while they run - no
-    PhysicsRepRootPart trick) to each selected player, 0.2s each (tween then orbit), ending early if their hit
+    PhysicsRepRootPart trick) to each selected player, 0.3s each (tween then orbit), ending early if their hit
     animation plays, hard limit 2s total from the start of Twin Fangs  >  tween (noclip) to -1000y onto a custom platform, 3s.
   Press it again for another run. The x closes the panel and turns antivoid off.
 ]]
@@ -105,9 +105,9 @@ end
 ------------------------------------------------------------------
 local VOID_Y = -1000
 local GLUE_GAP = 3                          -- orbit radius (studs) around the target
-local PER_TARGET = 0.2                      -- window per target: tween first, orbit sweep for the rest
+local PER_TARGET = 0.3                      -- window per target: tween first, orbit sweep for the rest
 local DROP_TIME = 0.05                     -- tween time down to VOID_Y (super fast)
-local TWEEN_TIME = 0.1                      -- tween time per target (at least 0.1s)
+local TWEEN_TIME = 0.15                     -- tween time per target
 local ORBIT_SPEED = 30                      -- radians/second - how fast you sweep around them
 local platform
 local function ensurePlatform()
@@ -182,7 +182,7 @@ local function suiryuVoid()
 				local per = math.min(PER_TARGET, hardEnd - tick())
 
 				stopOrbit()
-				local t0 = tick()   -- the 0.2s window covers tween + orbit
+				local t0 = tick()   -- the 0.3s window covers tween + orbit
 				-- 1) fastest tween onto the target
 				pcall(function()
 					local goal = tRoot.CFrame * CFrame.new(0, 0, GLUE_GAP)
