@@ -6,7 +6,7 @@
     glue (your own HumanoidRootPart orbit-sweeps GLUE_GAP studs around each target, super fast, every
     Heartbeat, re-aimed at their LIVE position every frame so it keeps up even while they run - no
     PhysicsRepRootPart trick) to each selected player, 0.2s each (tween then orbit), ending early if their hit
-    animation plays, hard limit 2s total from the start of Twin Fangs  >  PhysicsRepRootPart at -505y for 3s.
+    animation plays, hard limit 2s total from the start of Twin Fangs  >  tween (noclip) to -1000y onto a custom platform, 3s.
   Press it again for another run. The x closes the panel and turns antivoid off.
 ]]
 
@@ -103,9 +103,10 @@ end
 ------------------------------------------------------------------
 -- Suiryu void = Twin Fangs void, once
 ------------------------------------------------------------------
-local VOID_Y = -505
+local VOID_Y = -1000
 local GLUE_GAP = 3                          -- orbit radius (studs) around the target
 local PER_TARGET = 0.2                      -- window per target: tween first, orbit sweep for the rest
+local DROP_TIME = 0.05                     -- tween time down to VOID_Y (super fast)
 local TWEEN_TIME = 0.1                      -- tween time per target (at least 0.1s)
 local ORBIT_SPEED = 30                      -- radians/second - how fast you sweep around them
 local platform
@@ -223,28 +224,30 @@ local function suiryuVoid()
 		-- let the 2s limit pass
 		while tick() < hardEnd and track.IsPlaying do task.wait() end
 
-		-- then PhysicsRepRootPart at -505y for 3s (not anchored)
-		setStatus("PhysicsRepRootPart at " .. VOID_Y .. "y")
+		-- then tween super fast down to -1000y (noclip) onto our own platform, stay 3s
+		setStatus("Tweening to " .. VOID_Y .. "y")
 		ensurePlatform()
-		local anchorPart = Instance.new("Part")
-		anchorPart.Name = "SuiryuRepPart"
-		anchorPart.Size = Vector3.new(4, 1, 4)
-		anchorPart.Anchored = true
-		anchorPart.CanCollide = false
-		anchorPart.Transparency = 1
-		anchorPart.CFrame = CFrame.new(0, VOID_Y, 0)
-		anchorPart.Parent = workspace
+		local noclip = RunService.Stepped:Connect(function()
+			local c = me.Character
+			if not c then return end
+			for _, d in ipairs(c:GetDescendants()) do
+				if d:IsA("BasePart") then d.CanCollide = false end
+			end
+		end)
 		local rr = root(me.Character)
 		if rr then
-			rr.CFrame = CFrame.new(0, VOID_Y, 0)
-			zero(rr)
-			setRep(rr, rr)
-			setRep(rr, anchorPart)
+			pcall(function()
+				local tw = TweenService:Create(rr, TweenInfo.new(DROP_TIME, Enum.EasingStyle.Linear), {CFrame = CFrame.new(rr.Position.X, VOID_Y + 3, rr.Position.Z)})
+				tw:Play()
+				local tt = tick()
+				while tw.PlaybackState == Enum.PlaybackState.Playing and tick() - tt < DROP_TIME + 0.1 do RunService.Heartbeat:Wait() end
+				tw:Cancel()
+			end)
+			rr = root(me.Character)
+			if rr then zero(rr) end
 		end
+		noclip:Disconnect()
 		task.wait(3)
-		rr = root(me.Character)
-		if rr then setRep(rr, nil) end
-		pcall(function() anchorPart:Destroy() end)
 		setStatus("Done")
 	end)
 
