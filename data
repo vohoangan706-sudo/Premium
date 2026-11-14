@@ -6,6 +6,7 @@
 --      Dv.Scripthub()   -- saved scripts: write, save, run, fetch from a URL
 --      Dv.Explorer()    -- browse the game's instances and edit properties
 --      Dv.Note()        -- notes (Dv.Note("quick text") adds one directly)
+--      Dv.Spy()         -- logs remote calls (also Dv.spy())
 --      Dv.Close()       -- closes all Dataview windows
 --  Running this file by itself does nothing: the panel loads it.
 -- ======================================================================
@@ -1237,12 +1238,712 @@ local function setupDataview()
 	end
 
 	---------------------------------------------------------------
+	-- SPY: logs RemoteEvent:FireServer / RemoteFunction:InvokeServer calls
+	-- (needs an executor with hookmetamethod; nothing is changed unless
+	-- you press Block on a remote). Find mode watches what you do (UI
+	-- presses, keys, dying, the void...) and reports the remotes fired.
+	---------------------------------------------------------------
+	local Spy = {
+		log = {}, on = true, hooked = false, blocked = {}, ignored = {}, dirty = false, total = 0,
+		finding = false, conns = {}, charConns = {}, cooldown = false, lastFind = nil, onFind = nil,
+	}
+	local SPY_MAX = 300
+	local FIND_BEFORE = 1.0 -- seconds before the trigger that still count
+	local FIND_AFTER = 1.5 -- seconds after the trigger that count
+
+	local function serialize(value, depth)
+		depth = depth or 0
+		local kind = typeof(value)
+		if kind == "string" then
+			return string.format("%q", value)
+		elseif kind == "number" or kind == "boolean" or kind == "nil" then
+			return tostring(value)
+		elseif kind == "Instance" then
+			return pathOf(value)
+		elseif kind == "Vector3" then
+			return string.format("Vector3.new(%s, %s, %s)", value.X, value.Y, value.Z)
+		elseif kind == "Vector2" then
+			return string.format("Vector2.new(%s, %s)", value.X, value.Y)
+		elseif kind == "CFrame" then
+			local parts = { value:GetComponents() }
+			return "CFrame.new(" .. table.concat(parts, ", ") .. ")"
+		elseif kind == "Color3" then
+			return string.format("Color3.new(%s, %s, %s)", value.R, value.G, value.B)
+		elseif kind == "UDim2" then
+			return string.format("UDim2.new(%s, %s, %s, %s)", value.X.Scale, value.X.Offset, value.Y.Scale, value.Y.Offset)
+		elseif kind == "EnumItem" then
+			return tostring(value)
+		elseif kind == "table" then
+			if depth >= 4 then return "{...}" end
+			local parts = {}
+			local count = 0
+			for key, item in pairs(value) do
+				count = count + 1
+				if count > 40 then
+					table.insert(parts, "...")
+					break
+				end
+				local keyText
+				if type(key) == "string" then
+					keyText = "[" .. string.format("%q", key) .. "]"
+				else
+					keyText = "[" .. serialize(key, depth + 1) .. "]"
+				end
+				table.insert(parts, keyText .. " = " .. serialize(item, depth + 1))
+			end
+			return "{" .. table.concat(parts, ", ") .. "}"
+		end
+		return "<" .. kind .. "> " .. tostring(value)
+	end
+
+	local function argsText(entry)
+		local parts = {}
+		for i = 1, entry.n do parts[i] = serialize(entry.args[i]) end
+		return table.concat(parts, ", ")
+	end
+
+	local function callLine(entry)
+		return pathOf(entry.remote) .. ":" .. entry.method .. "(" .. argsText(entry) .. ")"
+	end
+
+	-- the source of a script: decompile first, .Source as a fallback
+	local function getSource(scr)
+		if type(decompile) == "function" then
+			local ok, result = pcall(decompile, scr)
+			if ok and type(result) == "string" and result ~= "" then return result end
+		end
+		local ok, result = pcall(function() return scr.Source end)
+		if ok and type(result) == "string" and result ~= "" then return result end
+		return nil
+	end
+
+	local function toast(text, color)
+		local g = getGui()
+		local label = make("TextLabel", {
+			Size = UDim2.new(0, 0, 0, 28), AutomaticSize = Enum.AutomaticSize.X, AnchorPoint = Vector2.new(0.5, 1),
+			Position = UDim2.new(0.5, 0, 1, -44), BackgroundColor3 = BG, BackgroundTransparency = 0.1,
+			Text = text, TextColor3 = color or TEXT, Font = Enum.Font.Code, TextSize = 13, BorderSizePixel = 0, ZIndex = 100002,
+		}, g)
+		round(label, 6)
+		make("UIPadding", { PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10) }, label)
+		make("UIStroke", { Color = Color3.fromRGB(80, 200, 255), Thickness = 1.5 }, label)
+		task.delay(5, function()
+			if label.Parent then label:Destroy() end
+		end)
+	end
+
+	local function installSpyHook()
+		if Spy.hooked then return true end
+		if type(hookmetamethod) ~= "function" or type(getnamecallmethod) ~= "function" then
+			return false, "this executor has no hookmetamethod/getnamecallmethod"
+		end
+		local wrap = type(newcclosure) == "function" and newcclosure or function(f) return f end
+		local ok, err = pcall(function()
+			local old
+			old = hookmetamethod(game, "__namecall", wrap(function(self, ...)
+				local method = getnamecallmethod()
+				if Spy.on and (method == "FireServer" or method == "InvokeServer") then
+					local fromUs = type(checkcaller) == "function" and checkcaller()
+					if not fromUs then
+						local okClass, class = pcall(function() return self.ClassName end)
+						if okClass and (class == "RemoteEvent" or class == "UnreliableRemoteEvent" or class == "RemoteFunction") then
+							if Spy.ignored[self] then
+								return old(self, ...)
+							end
+							local caller = nil
+							if type(getcallingscript) == "function" then
+								local okScript, found = pcall(getcallingscript)
+								if okScript then caller = found end
+							end
+							local packed = table.pack(...)
+							Spy.total = Spy.total + 1
+							table.insert(Spy.log, {
+								id = Spy.total, remote = self, class = class, method = method,
+								args = packed, n = packed.n, time = os.date("%H:%M:%S"), clock = os.clock(), caller = caller,
+							})
+							if #Spy.log > SPY_MAX then table.remove(Spy.log, 1) end
+							Spy.dirty = true
+							if Spy.blocked[self] then
+								return nil
+							end
+						end
+					end
+				end
+				return old(self, ...)
+			end))
+		end)
+		if not ok then return false, tostring(err) end
+		Spy.hooked = true
+		return true
+	end
+
+	---------------------------------------------------------------
+	-- FIND MODE: when something happens, report which remotes fired
+	---------------------------------------------------------------
+	local function isOurs(obj)
+		if gui and obj:IsDescendantOf(gui) then return true end
+		if context.screenGui and obj:IsDescendantOf(context.screenGui) then return true end
+		local pick = PlayerGui:FindFirstChild("AetherPick")
+		return pick ~= nil and obj:IsDescendantOf(pick)
+	end
+
+	local function finishFind(trigger, t0)
+		local hits = {}
+		for _, entry in ipairs(Spy.log) do
+			if entry.clock >= t0 - FIND_BEFORE and entry.clock <= t0 + FIND_AFTER then
+				table.insert(hits, entry)
+			end
+		end
+		local lines = { "Trigger: " .. trigger, "" }
+		if #hits == 0 then
+			table.insert(lines, "Not found - no RemoteEvent or RemoteFunction was fired around that.")
+		else
+			table.insert(lines, "Found " .. #hits .. " remote call(s):")
+			for _, entry in ipairs(hits) do
+				table.insert(lines, "")
+				table.insert(lines, "#" .. entry.id .. "  " .. entry.remote.Name .. "  [" .. entry.class .. "]")
+				table.insert(lines, "   " .. callLine(entry))
+			end
+		end
+		local result = { trigger = trigger, hits = hits, text = table.concat(lines, "\n") }
+		Spy.lastFind = result
+		if Spy.onFind then Spy.onFind(result) end
+		if #hits == 0 then
+			toast("Find: not found (" .. trigger .. ")", RED)
+		else
+			toast("Find: " .. #hits .. " remote(s) after " .. trigger .. " - open Dv.Spy()", GREEN)
+		end
+	end
+
+	local function fireTrigger(text)
+		if Spy.cooldown or not Spy.finding then return end
+		Spy.cooldown = true
+		local t0 = os.clock()
+		task.delay(FIND_AFTER + 0.1, function()
+			Spy.cooldown = false
+			finishFind(text, t0)
+		end)
+	end
+
+	local function disarmFind()
+		Spy.finding = false
+		for _, c in ipairs(Spy.conns) do c:Disconnect() end
+		for _, c in ipairs(Spy.charConns) do c:Disconnect() end
+		Spy.conns = {}
+		Spy.charConns = {}
+	end
+
+	local function armFind()
+		disarmFind()
+		Spy.finding = true
+		Spy.on = true
+		local RunService = game:GetService("RunService")
+		local function add(conn) table.insert(Spy.conns, conn) end
+
+		add(UserInputService.InputBegan:Connect(function(input, processed)
+			local kind = input.UserInputType
+			if kind == Enum.UserInputType.MouseButton1 or kind == Enum.UserInputType.Touch then
+				if processed then
+					local ok, objects = pcall(function()
+						return PlayerGui:GetGuiObjectsAtPosition(input.Position.X, input.Position.Y)
+					end)
+					if not ok or #objects == 0 or isOurs(objects[1]) then return end
+					local pick = nil
+					for _, obj in ipairs(objects) do
+						if obj:IsA("GuiButton") then
+							pick = obj
+							break
+						end
+					end
+					pick = pick or objects[1]
+					local label = "UI: " .. pick.Name .. " (" .. pick.ClassName .. ")"
+					local okText, text = pcall(function() return pick.Text end)
+					if okText and type(text) == "string" and text ~= "" then label = label .. " \"" .. text:sub(1, 20) .. "\"" end
+					fireTrigger(label)
+				elseif kind == Enum.UserInputType.MouseButton1 then
+					fireTrigger("Mouse click in the world")
+				end
+			elseif kind == Enum.UserInputType.Keyboard and not processed then
+				fireTrigger("Key: " .. input.KeyCode.Name)
+			end
+		end))
+
+		local function watchCharacter(char)
+			for _, c in ipairs(Spy.charConns) do c:Disconnect() end
+			Spy.charConns = {}
+			local function addc(conn) table.insert(Spy.charConns, conn) end
+			task.spawn(function()
+				local humanoid = char:FindFirstChildOfClass("Humanoid") or char:WaitForChild("Humanoid", 5)
+				if not humanoid or not Spy.finding then return end
+				local lastHealth = humanoid.Health
+				addc(humanoid.Died:Connect(function()
+					local root = char:FindFirstChild("HumanoidRootPart")
+					if root and root.Position.Y <= workspace.FallenPartsDestroyHeight + 60 then
+						fireTrigger("Died: fell into the void")
+					else
+						fireTrigger("Died")
+					end
+				end))
+				addc(humanoid.HealthChanged:Connect(function(health)
+					if health < lastHealth - 0.5 and health > 0 then fireTrigger("Took damage") end
+					lastHealth = health
+				end))
+			end)
+			local function watchTool(tool)
+				if tool:IsA("Tool") then
+					addc(tool.Activated:Connect(function() fireTrigger("Tool used: " .. tool.Name) end))
+				end
+			end
+			for _, child in ipairs(char:GetChildren()) do watchTool(child) end
+			addc(char.ChildAdded:Connect(watchTool))
+		end
+
+		add(player.CharacterAdded:Connect(function(char)
+			fireTrigger("Respawned")
+			watchCharacter(char)
+		end))
+		if player.Character then watchCharacter(player.Character) end
+		add(player.Chatted:Connect(function(message) fireTrigger("Chat: " .. tostring(message):sub(1, 30)) end))
+
+		local inVoid = false
+		add(RunService.Heartbeat:Connect(function()
+			local char = player.Character
+			local root = char and char:FindFirstChild("HumanoidRootPart")
+			if not root then return end
+			if root.Position.Y < workspace.FallenPartsDestroyHeight + 80 then
+				if not inVoid then
+					inVoid = true
+					fireTrigger("Falling into the void")
+				end
+			else
+				inVoid = false
+			end
+		end))
+	end
+
+	---------------------------------------------------------------
+	-- the Spy window
+	---------------------------------------------------------------
+	local function makeGlass(parent, size, position)
+		local button = make("TextButton", {
+			Size = size, Position = position, BackgroundColor3 = Color3.fromRGB(120, 190, 255), BackgroundTransparency = 0.6,
+			Text = "", AutoButtonColor = false, BorderSizePixel = 0, ClipsDescendants = true,
+		}, parent)
+		round(button, 14)
+		make("UIGradient", {
+			Rotation = 90,
+			Color = ColorSequence.new(Color3.fromRGB(255, 255, 255), Color3.fromRGB(90, 160, 255)),
+			Transparency = NumberSequence.new({
+				NumberSequenceKeypoint.new(0, 0.3), NumberSequenceKeypoint.new(0.5, 0.55), NumberSequenceKeypoint.new(1, 0.8),
+			}),
+		}, button)
+		local stroke = make("UIStroke", {
+			Color = Color3.fromRGB(205, 235, 255), Thickness = 1.6, Transparency = 0.3, ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+		}, button)
+		local gloss = make("Frame", {
+			Size = UDim2.new(1, -10, 0.42, 0), Position = UDim2.new(0, 5, 0, 3),
+			BackgroundColor3 = Color3.new(1, 1, 1), BackgroundTransparency = 0.78, BorderSizePixel = 0, ZIndex = 2,
+		}, button)
+		round(gloss, 11)
+		make("UIGradient", { Rotation = 90, Transparency = NumberSequence.new(0.35, 1) }, gloss)
+		local label = make("TextLabel", {
+			Size = UDim2.new(1, -12, 1, 0), Position = UDim2.new(0, 6, 0, 0), BackgroundTransparency = 1, ZIndex = 3,
+			Text = "", TextColor3 = Color3.fromRGB(240, 250, 255), Font = Enum.Font.GothamBold, TextSize = 13, TextWrapped = true,
+		}, button)
+		return button, label, stroke
+	end
+
+	local function openSpy()
+		if windows.spy then front(windows.spy) return end
+		local win = createWindow("spy", "Dataview - Spy")
+		local body = win.body
+		local TweenService = game:GetService("TweenService")
+		local selected = nil
+		local MAX_ROWS = 150
+		local codeList = {}
+		local codeIndex = 1
+		local codeText = ""
+		local fetching = false
+		local pulse = nil
+
+		-- left: find button, controls, log
+		local left = makePanel(body, UDim2.new(0.5, -6, 1, -8), UDim2.new(0, 4, 0, 4))
+		local glass, glassLabel, glassStroke = makeGlass(left, UDim2.new(1, -12, 0, 44), UDim2.new(0, 6, 0, 6))
+		local toolRow = make("Frame", { Size = UDim2.new(1, -12, 0, 26), Position = UDim2.new(0, 6, 0, 54), BackgroundTransparency = 1 }, left)
+		make("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4), VerticalAlignment = Enum.VerticalAlignment.Center }, toolRow)
+		local pauseButton = makeButton(toolRow, "Pause", { Size = UDim2.new(0, 0, 0, 24), TextSize = 12 })
+		local clearButton = makeButton(toolRow, "Clear", { Size = UDim2.new(0, 0, 0, 24), TextSize = 12 })
+		local unignoreButton = makeButton(toolRow, "Unignore all", { Size = UDim2.new(0, 0, 0, 24), TextSize = 12 })
+		local filterBox = makeBox(left, UDim2.new(1, -12, 0, 24), UDim2.new(0, 6, 0, 84), "")
+		filterBox.PlaceholderText = "Filter by remote name"
+		local listScroll = makeScroll(left, UDim2.new(1, -8, 1, -140), UDim2.new(0, 4, 0, 112))
+		make("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }, listScroll)
+		local listStatus = makeLabel(left, "", UDim2.new(1, -12, 0, 18), UDim2.new(0, 6, 1, -22), DIM, 11)
+
+		-- right: details, code
+		local right = makePanel(body, UDim2.new(0.5, -4, 1, -8), UDim2.new(0.5, 2, 0, 4))
+		local detailTitle = makeLabel(right, "Select a call on the left", UDim2.new(1, -12, 0, 20), UDim2.new(0, 6, 0, 6), BRIGHT, 13)
+		local actionRow = make("Frame", { Size = UDim2.new(1, -12, 0, 26), Position = UDim2.new(0, 6, 0, 30), BackgroundTransparency = 1 }, right)
+		make("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4), VerticalAlignment = Enum.VerticalAlignment.Center }, actionRow)
+		local copyCallButton = makeButton(actionRow, "Copy call", { Size = UDim2.new(0, 0, 0, 24), TextSize = 12 })
+		local replayButton = makeButton(actionRow, "Replay", { Size = UDim2.new(0, 0, 0, 24), TextSize = 12 })
+		local blockButton = makeButton(actionRow, "Block", { Size = UDim2.new(0, 0, 0, 24), TextSize = 12, Color = Color3.fromRGB(110, 35, 10) })
+		local ignoreButton = makeButton(actionRow, "Ignore", { Size = UDim2.new(0, 0, 0, 24), TextSize = 12 })
+		local codeRow = make("Frame", { Size = UDim2.new(1, -12, 0, 26), Position = UDim2.new(0, 6, 0, 58), BackgroundTransparency = 1 }, right)
+		make("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4), VerticalAlignment = Enum.VerticalAlignment.Center }, codeRow)
+		local fetchButton = makeButton(codeRow, "Fetch code", { Size = UDim2.new(0, 0, 0, 24), TextSize = 12, Color = Color3.fromRGB(30, 80, 160) })
+		local prevButton = makeButton(codeRow, "<", { Size = UDim2.new(0, 0, 0, 24), TextSize = 12 })
+		local nextButton = makeButton(codeRow, ">", { Size = UDim2.new(0, 0, 0, 24), TextSize = 12 })
+		local copyCodeButton = makeButton(codeRow, "Copy code", { Size = UDim2.new(0, 0, 0, 24), TextSize = 12 })
+		local detailsButton = makeButton(codeRow, "Details", { Size = UDim2.new(0, 0, 0, 24), TextSize = 12 })
+		local detailBox = make("TextBox", {
+			Size = UDim2.new(1, -12, 1, -118), Position = UDim2.new(0, 6, 0, 90), BackgroundColor3 = FIELD, TextColor3 = TEXT,
+			Font = Enum.Font.Code, TextSize = 12, Text = "", TextWrapped = true, MultiLine = true, ClearTextOnFocus = false,
+			TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top, TextEditable = false, BorderSizePixel = 0,
+		}, right)
+		round(detailBox, 4)
+		local codeScroll = make("ScrollingFrame", {
+			Size = UDim2.new(1, -12, 1, -118), Position = UDim2.new(0, 6, 0, 90), BackgroundColor3 = FIELD, BorderSizePixel = 0,
+			ScrollBarThickness = 5, CanvasSize = UDim2.new(0, 0, 0, 0), AutomaticCanvasSize = Enum.AutomaticSize.Y,
+			ScrollingDirection = Enum.ScrollingDirection.Y, Visible = false,
+		}, right)
+		round(codeScroll, 4)
+		make("UIListLayout", { SortOrder = Enum.SortOrder.LayoutOrder }, codeScroll)
+		local detailStatus = makeLabel(right, "", UDim2.new(1, -12, 0, 18), UDim2.new(0, 6, 1, -22), DIM, 11)
+
+		local function setStatus(text, color)
+			detailStatus.Text = text
+			detailStatus.TextColor3 = color or DIM
+		end
+
+		-- long source is cut into chunks so no single box gets too big
+		local function showCode(text)
+			for _, child in ipairs(codeScroll:GetChildren()) do
+				if child:IsA("TextBox") then child:Destroy() end
+			end
+			detailBox.Visible = false
+			codeScroll.Visible = true
+			local shown = text
+			local truncated = false
+			if #shown > 200000 then
+				shown = shown:sub(1, 200000)
+				truncated = true
+			end
+			local pos = 1
+			local index = 0
+			while pos <= #shown do
+				local stop = math.min(pos + 5999, #shown)
+				if stop < #shown then
+					local newline = shown:sub(pos, stop):match(".*()\n")
+					if newline and newline > 1 then stop = pos + newline - 1 end
+				end
+				index = index + 1
+				local box = make("TextBox", {
+					Size = UDim2.new(1, -8, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1,
+					TextColor3 = TEXT, Font = Enum.Font.Code, TextSize = 12, Text = "", TextWrapped = true, MultiLine = true,
+					ClearTextOnFocus = false, TextEditable = false, TextXAlignment = Enum.TextXAlignment.Left,
+					TextYAlignment = Enum.TextYAlignment.Top, LayoutOrder = index,
+				}, codeScroll)
+				pcall(function() box.Text = shown:sub(pos, stop) end)
+				pos = stop + 1
+			end
+			if truncated then
+				index = index + 1
+				makeLabel(codeScroll, "-- display cut at 200000 characters; Copy code copies everything", UDim2.new(1, -8, 0, 18), UDim2.new(0, 0, 0, 0), DIM, 11).LayoutOrder = index
+			end
+			codeScroll.CanvasPosition = Vector2.new(0, 0)
+		end
+
+		local function showCodeEntry()
+			local item = codeList[codeIndex]
+			if not item then return end
+			codeText = "-- " .. item.note .. ": " .. item.path .. "   [" .. codeIndex .. "/" .. #codeList .. "]\n\n" .. item.source
+			showCode(codeText)
+		end
+
+		local function showDetail()
+			codeScroll.Visible = false
+			detailBox.Visible = true
+			local entry = selected
+			if not entry then
+				detailTitle.Text = "Select a call on the left"
+				detailBox.Text = ""
+				return
+			end
+			detailTitle.Text = "#" .. entry.id .. "  " .. entry.remote.Name .. "  [" .. entry.class .. "]"
+			local blocked = Spy.blocked[entry.remote] and "  (BLOCKED)" or ""
+			blockButton.Text = Spy.blocked[entry.remote] and "Unblock" or "Block"
+			local from = entry.caller and pathOf(entry.caller) or "(unknown - executor has no getcallingscript)"
+			detailBox.Text = "Path:   " .. pathOf(entry.remote) .. blocked
+				.. "\nMethod: " .. entry.method .. "   Time: " .. entry.time
+				.. "\nFired by script: " .. from
+				.. "\nArgs:   " .. entry.n
+				.. "\n\n" .. callLine(entry)
+		end
+
+		local function refreshList()
+			Spy.dirty = false
+			for _, child in ipairs(listScroll:GetChildren()) do
+				if not child:IsA("UIListLayout") then child:Destroy() end
+			end
+			local query = filterBox.Text:lower()
+			local shown = 0
+			for index = #Spy.log, 1, -1 do
+				local entry = Spy.log[index]
+				local name = entry.remote.Name
+				if query == "" or name:lower():find(query, 1, true) then
+					shown = shown + 1
+					if shown > MAX_ROWS then break end
+					local isSelected = entry == selected
+					local tag = entry.class == "RemoteFunction" and "RF" or "RE"
+					local row = make("TextButton", {
+						Size = UDim2.new(1, -6, 0, 22), BackgroundColor3 = FIELD_ON, BackgroundTransparency = isSelected and 0 or 1,
+						BorderSizePixel = 0, LayoutOrder = shown, Font = Enum.Font.Code, TextSize = 12,
+						Text = "#" .. entry.id .. " " .. entry.time .. " [" .. tag .. "] " .. name .. " (" .. entry.n .. ")",
+						TextColor3 = Spy.blocked[entry.remote] and RED or (isSelected and TEXT or Color3.fromRGB(255, 150, 90)),
+						TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd,
+					}, listScroll)
+					row.MouseButton1Click:Connect(function()
+						selected = entry
+						showDetail()
+						refreshList()
+					end)
+				end
+			end
+			local state = Spy.on and "logging" or "paused"
+			listStatus.Text = #Spy.log .. " call(s) kept (" .. state .. "), " .. Spy.total .. " seen"
+		end
+
+		-- shows a Find result: the text, and the first hit selected
+		local function applyFind(result)
+			selected = result.hits[1]
+			showDetail()
+			detailTitle.Text = "Find result"
+			detailBox.Text = result.text
+			if selected then
+				detailBox.Text = result.text .. "\n\n---- first call ----\n" .. "Fired by script: "
+					.. (selected.caller and pathOf(selected.caller) or "(unknown)") .. "\nTap Fetch code to read its script."
+			end
+			refreshList()
+		end
+
+		local function renderFind()
+			if Spy.finding then
+				glassLabel.Text = "FIND MODE ON\nminimize this window, then use the game"
+				glass.BackgroundColor3 = Color3.fromRGB(60, 230, 200)
+				glassStroke.Color = Color3.fromRGB(110, 255, 235)
+				if not pulse then
+					pulse = TweenService:Create(glassStroke, TweenInfo.new(0.9, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), { Transparency = 0.85 })
+					pulse:Play()
+				end
+			else
+				glassLabel.Text = "Find RemoteEvents mode\n(tap to turn on)"
+				glass.BackgroundColor3 = Color3.fromRGB(120, 190, 255)
+				glassStroke.Color = Color3.fromRGB(205, 235, 255)
+				if pulse then
+					pulse:Cancel()
+					pulse = nil
+				end
+				glassStroke.Transparency = 0.3
+			end
+		end
+
+		local hooked, hookErr = installSpyHook()
+		if not hooked then
+			detailTitle.Text = "Spy can't run here"
+			detailBox.Text = "Spy needs an executor function called hookmetamethod, and " .. tostring(hookErr) .. ".\n\nNothing was hooked."
+		end
+
+		glass.MouseButton1Click:Connect(function()
+			if Spy.finding then
+				disarmFind()
+				setStatus("Find mode off.", DIM)
+			else
+				local ok, err = installSpyHook()
+				if not ok then
+					setStatus("Find mode can't run: " .. tostring(err), RED)
+					return
+				end
+				armFind()
+				setStatus("Find mode on. Minimize this window and press a UI button, a key, die...", GREEN)
+			end
+			renderFind()
+		end)
+
+		pauseButton.MouseButton1Click:Connect(function()
+			Spy.on = not Spy.on
+			pauseButton.Text = Spy.on and "Pause" or "Resume"
+			refreshList()
+		end)
+		clearButton.MouseButton1Click:Connect(function()
+			Spy.log = {}
+			selected = nil
+			showDetail()
+			refreshList()
+		end)
+		unignoreButton.MouseButton1Click:Connect(function()
+			Spy.ignored = {}
+			setStatus("Ignore list cleared.", GREEN)
+		end)
+		filterBox:GetPropertyChangedSignal("Text"):Connect(refreshList)
+
+		copyCallButton.MouseButton1Click:Connect(function()
+			if not selected then return end
+			if copyText(callLine(selected)) then
+				setStatus("Call copied.", GREEN)
+			else
+				setStatus("No clipboard here.", RED)
+			end
+		end)
+
+		replayButton.MouseButton1Click:Connect(function()
+			local entry = selected
+			if not entry then return end
+			task.spawn(function()
+				local ok, result = pcall(function()
+					return entry.remote[entry.method](entry.remote, table.unpack(entry.args, 1, entry.n))
+				end)
+				if ok then
+					setStatus("Replayed." .. (result ~= nil and (" Returned: " .. serialize(result)) or ""), GREEN)
+				else
+					setStatus(tostring(result), RED)
+				end
+			end)
+		end)
+
+		blockButton.MouseButton1Click:Connect(function()
+			if not selected then return end
+			Spy.blocked[selected.remote] = (not Spy.blocked[selected.remote]) or nil
+			showDetail()
+			refreshList()
+			setStatus(Spy.blocked[selected.remote] and "Blocked: calls to it won't reach the server." or "Unblocked.", Spy.blocked[selected.remote] and RED or GREEN)
+		end)
+
+		ignoreButton.MouseButton1Click:Connect(function()
+			if not selected then return end
+			Spy.ignored[selected.remote] = true
+			local remote = selected.remote
+			for index = #Spy.log, 1, -1 do
+				if Spy.log[index].remote == remote then table.remove(Spy.log, index) end
+			end
+			selected = nil
+			showDetail()
+			refreshList()
+			setStatus("Ignoring that remote from now on.", GREEN)
+		end)
+
+		-- Fetch code: the script that fired the call, plus every script that mentions the remote's name
+		fetchButton.MouseButton1Click:Connect(function()
+			local entry = selected
+			if not entry then
+				setStatus("Select a call first.", RED)
+				return
+			end
+			if fetching then return end
+			fetching = true
+			task.spawn(function()
+				local list = {}
+				local seen = {}
+				local name = entry.remote.Name
+				if entry.caller then
+					seen[entry.caller] = true
+					table.insert(list, {
+						path = pathOf(entry.caller), note = "Script that fired it",
+						source = getSource(entry.caller) or "-- could not read this script's source (decompile not available?)",
+					})
+				end
+				local pool = {}
+				local function addPool(fn)
+					if type(fn) ~= "function" then return end
+					local ok, found = pcall(fn)
+					if ok and type(found) == "table" then
+						for _, scr in ipairs(found) do table.insert(pool, scr) end
+					end
+				end
+				addPool(getscripts)
+				addPool(getloadedmodules)
+				local total = #pool
+				for index, scr in ipairs(pool) do
+					if not win.frame.Parent then
+						fetching = false
+						return
+					end
+					if not seen[scr] then
+						seen[scr] = true
+						local source = getSource(scr)
+						if source and source:find(name, 1, true) then
+							table.insert(list, { path = pathOf(scr), note = "Mentions \"" .. name .. "\"", source = source })
+							if #list >= 25 then break end
+						end
+					end
+					if index % 8 == 0 then
+						setStatus("Scanning scripts " .. index .. "/" .. total .. " ...", DIM)
+						task.wait()
+					end
+				end
+				fetching = false
+				if #list == 0 then
+					codeList = {}
+					showDetail()
+					detailBox.Text = "Not found: no readable script fired or mentions \"" .. name .. "\".\n\nThis executor may lack decompile/getscripts, or the code is on the server (server code can't be read from the client)."
+					setStatus("No code found.", RED)
+				else
+					codeList = list
+					codeIndex = 1
+					showCodeEntry()
+					setStatus(#list .. " script(s) found. Use < and > to switch.", GREEN)
+				end
+			end)
+		end)
+		prevButton.MouseButton1Click:Connect(function()
+			if #codeList == 0 then return end
+			codeIndex = (codeIndex - 2) % #codeList + 1
+			showCodeEntry()
+		end)
+		nextButton.MouseButton1Click:Connect(function()
+			if #codeList == 0 then return end
+			codeIndex = codeIndex % #codeList + 1
+			showCodeEntry()
+		end)
+		copyCodeButton.MouseButton1Click:Connect(function()
+			if codeText == "" then
+				setStatus("Fetch code first.", RED)
+				return
+			end
+			if copyText(codeText) then
+				setStatus("Code copied.", GREEN)
+			else
+				setStatus("No clipboard here.", RED)
+			end
+		end)
+		detailsButton.MouseButton1Click:Connect(showDetail)
+
+		Spy.onFind = function(result)
+			if win.frame.Parent then applyFind(result) end
+		end
+
+		-- new calls arrive from the hook; redraw a few times a second
+		task.spawn(function()
+			while win.frame.Parent do
+				if Spy.dirty then refreshList() end
+				task.wait(0.4)
+			end
+		end)
+
+		renderFind()
+		refreshList()
+		if Spy.lastFind then applyFind(Spy.lastFind) end
+	end
+
+	---------------------------------------------------------------
 	-- the Dv API (used from the {} editor)
 	---------------------------------------------------------------
 	local Dv = {}
 
 	function Dv.Scripthub() openScripthub() end
 	function Dv.Explorer() openExplorer() end
+	function Dv.Spy() openSpy() end
+	Dv.spy = Dv.Spy
 
 	-- Dv.Note() opens the notes app; Dv.Note("text") saves a new note first
 	function Dv.Note(text)
@@ -1260,6 +1961,7 @@ local function setupDataview()
 	local function enableGlobals()
 		linuxHooks.extraGlobals = linuxHooks.extraGlobals or {}
 		linuxHooks.extraGlobals.Dv = Dv
+		Spy.on = true
 	end
 
 	local function disableGlobals()
@@ -1279,7 +1981,7 @@ local function setupDataview()
 		"Selecting previously unselected package dataview.",
 		"Unpacking dataview (1.0.0) ...",
 		"Setting up dataview (1.0.0) ...",
-		"Linking Dv.Scripthub, Dv.Explorer, Dv.Note ... OK",
+		"Linking Dv.Scripthub, Dv.Explorer, Dv.Note, Dv.Spy ... OK",
 		"Installation complete.",
 	}
 
@@ -1287,7 +1989,7 @@ local function setupDataview()
 
 	local function installDataview()
 		if settings.installed then
-			return "Dataview is already installed. Use Dv.Scripthub(), Dv.Explorer() or Dv.Note() in {} mode."
+			return "Dataview is already installed. Use Dv.Scripthub(), Dv.Explorer(), Dv.Note() or Dv.Spy() in {} mode."
 		end
 		if installing then
 			return "Install already in progress."
@@ -1302,7 +2004,7 @@ local function setupDataview()
 			saveSettings()
 			enableGlobals()
 			installing = false
-			addLine("Dataview ready. In {} mode: Dv.Scripthub()  Dv.Explorer()  Dv.Note()", GREEN)
+			addLine("Dataview ready. In {} mode: Dv.Scripthub()  Dv.Explorer()  Dv.Note()  Dv.Spy()", GREEN)
 		end)
 		return "Installing dataview..."
 	end
@@ -1313,6 +2015,10 @@ local function setupDataview()
 			return "Dataview isn't installed."
 		end
 		closeAll()
+		disarmFind()
+		Spy.on = false
+		Spy.blocked = {}
+		Spy.log = {}
 		settings.installed = nil
 		saveSettings()
 		disableGlobals()
