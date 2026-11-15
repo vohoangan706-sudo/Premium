@@ -54,7 +54,7 @@ local function zero(part)
 	pcall(function() part.RotVelocity = Vector3.zero end)
 end
 
-local GLUE_POS = Vector3.new(0, -10000, 0)   -- where your own root sits while gluing
+local GLUE_POS = Vector3.new(0, 0, 5)   -- where your own root sits while gluing (original spot)
 
 local function setRep(part, value)
 	if sethiddenproperty and part and part.Parent then
