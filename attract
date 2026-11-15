@@ -54,6 +54,8 @@ local function zero(part)
 	pcall(function() part.RotVelocity = Vector3.zero end)
 end
 
+local GLUE_POS = Vector3.new(0, -10000, 0)   -- where your own root sits while gluing
+
 local function setRep(part, value)
 	if sethiddenproperty and part and part.Parent then
 		pcall(function() sethiddenproperty(part, "PhysicsRepRootPart", value) end)
@@ -103,7 +105,7 @@ local function attach(a, b, hum)
 		end)
 	end
 
-	a.CFrame = CFrame.new(0, 0, 5)
+	a.CFrame = CFrame.new(GLUE_POS)
 	zero(a)
 	setRep(a, a)
 	setRep(a, b)
@@ -225,7 +227,7 @@ local function start(player)
 		if a ~= attachedMy or b ~= attachedTheir then
 			attach(a, b, hum)          -- first attach, or either of you respawned
 		else
-			a.CFrame = CFrame.new(0, 0, 5)
+			a.CFrame = CFrame.new(GLUE_POS)
 			zero(a)
 			setRep(a, b)
 		end
