@@ -4,7 +4,7 @@
 --  PACKAGE_URLS.returnbydeath slot. Then type:  returnbydeath
 --  Running this file by itself does nothing: the panel loads it.
 --
---  returnbydeath [on|off] | status | reset
+--  returnbydeath [on|off] | status | reset | forgive <player>
 --  Health hits 0 -> you are sent to the void (Y = -5000); when you respawn
 --  you are put back where you died with a sound and a revive animation.
 --
@@ -14,10 +14,11 @@
 --  the executor has writefile) and builds a defence from then on:
 --    void kill -> antivoid is turned on + rescue back to your last safe spot
 --    fall      -> soft landings
---    kill part -> switched off locally and avoided
+--    kill part -> every part with that name is deleted (on your client)
 --    damage    -> retreat when you lose health fast
+--    a player kills you -> you avoid that player from then on (vanish when they get close)
 --  After 10 deaths it also PREDICTS attacks (teleports to 9e9 for 1 s when an attack is about to land,
---  brakes at void edges, leads moving kill parts).
+--  brakes at void edges).
 --  The reset button still works and isn't counted as a death.
 -- ======================================================================
 local context = ...
@@ -34,21 +35,23 @@ local screenGui = context.screenGui
 local RunService = game:GetService("RunService")
 local HttpService = game:GetService("HttpService")
 local StarterGui = game:GetService("StarterGui")
+local Players = game:GetService("Players")
 
 local SAVE_FILE = "AetherAdapt.json"
+local KILLER_GUESS_RADIUS = 10 -- no kill tag: only a player this close (studs) counts as your killer
 local PREDICT_AFTER = 10 -- deaths before the attack-prediction system switches on
 
 local enabled = false
 local data = nil
 local connections = {}
 local charConnections = {}
-local blocked = setmetatable({}, { __mode = "k" }) -- kill parts we switched off locally
+local MAX_DELETE_SIZE = 300 -- never delete a part bigger than this (floors, baseplates, walls)
 local resetEvent = nil
 local resetPressed = false
 local godmodeOffered = false
 
 local function freshData()
-	return { deaths = 0, resets = 0, causes = {}, parts = {}, killers = {}, weapons = {}, kd = { sum = 0, n = 0 }, log = {} }
+	return { deaths = 0, resets = 0, causes = {}, parts = {}, killers = {}, weapons = {}, avoid = {}, kd = { sum = 0, n = 0 }, log = {} }
 end
 data = freshData()
 
@@ -68,7 +71,7 @@ local function load()
 		if type(d) ~= "table" then return end
 		data.deaths = tonumber(d.deaths) or 0
 		data.resets = tonumber(d.resets) or 0
-		for _, key in ipairs({ "causes", "parts", "killers", "weapons", "kd", "log" }) do
+		for _, key in ipairs({ "causes", "parts", "killers", "weapons", "avoid", "kd", "log" }) do
 			if type(d[key]) == "table" then data[key] = d[key] end
 		end
 		data.kd.sum = tonumber(data.kd.sum) or 0
@@ -82,9 +85,8 @@ local function clearCharConnections()
 end
 
 local function consider(inst)
-	if inst:IsA("BasePart") and data.parts[inst.Name] then
-		blocked[inst] = true
-		pcall(function() inst.CanTouch = false end)
+	if inst:IsA("BasePart") and data.parts[inst.Name] and inst.Size.Magnitude <= MAX_DELETE_SIZE then
+		pcall(function() inst:Destroy() end) -- deleted on your client only
 	end
 end
 
@@ -150,7 +152,7 @@ local function watchCharacter(char)
 	local hist, safe = {}, {}
 	local classified = false
 	local lastTouch = nil
-	local lastSample, lastEvade, lastBlockCheck, lastBlockHit, lastThreat, lastDodge = 0, 0, 0, 0, 0, 0
+	local lastSample, lastEvade, lastThreat, lastDodge = 0, 0, 0, 0
 	local rayParams = RaycastParams.new()
 	rayParams.FilterType = Enum.RaycastFilterType.Exclude
 	rayParams.FilterDescendantsInstances = { char }
@@ -166,10 +168,20 @@ local function watchCharacter(char)
 
 	-- an attack is about to land: hold the character at 9e9 on Heartbeat for 1 s, then bring it back
 	local vanished = false
-	local function vanish()
+	local function vanish(fromPos)
 		if vanished then return false end
 		vanished = true
 		local origin = root.CFrame
+		-- come back ~30 studs further from whoever you are avoiding (if there is ground there)
+		if fromPos then
+			local flat = Vector3.new(origin.Position.X - fromPos.X, 0, origin.Position.Z - fromPos.Z)
+			if flat.Magnitude > 0.1 then
+				local target = origin.Position + flat.Unit * 30
+				if workspace:Raycast(target + Vector3.new(0, 5, 0), Vector3.new(0, -40, 0), rayParams) then
+					origin = origin - origin.Position + target + Vector3.new(0, 3, 0)
+				end
+			end
+		end
 		local far = CFrame.new(9e9, 9e9, 9e9)
 		local started = os.clock()
 		local conn
@@ -240,6 +252,22 @@ local function watchCharacter(char)
 			local tool = nearest.model:FindFirstChildOfClass("Tool")
 			if tool then data.weapons[tool.Name] = (data.weapons[tool.Name] or 0) + 1 end
 		end
+		-- a player killed you: the kill tag if the game sets one, else the nearest player within KILLER_GUESS_RADIUS -> avoid them from now on
+		local killerPlayer = nil
+		local tag = hum:FindFirstChild("creator")
+		if tag and typeof(tag.Value) == "Instance" and tag.Value:IsA("Player") and tag.Value ~= player then
+			killerPlayer = tag.Value
+		elseif nearest and bestDist <= KILLER_GUESS_RADIUS then
+			local p = Players:GetPlayerFromCharacter(nearest.model)
+			if p and p ~= player then killerPlayer = p end
+		end
+		if killerPlayer then
+			if killerPlayer.Name ~= killerName then
+				data.killers[killerPlayer.Name] = (data.killers[killerPlayer.Name] or 0) + 1
+			end
+			killerName = killerPlayer.Name
+			data.avoid[killerName] = true
+		end
 		if last and last.h >= hum.MaxHealth * 0.75 then
 			record("oneshot", killerName)
 		elseif hist[1] and last and hist[1].h > last.h + 0.5 then
@@ -284,25 +312,6 @@ local function watchCharacter(char)
 			if hit then root.AssemblyLinearVelocity = Vector3.new(vel.X, 0, vel.Z) end
 		end
 
-		-- defence: kill parts that already killed you (moving ones are checked where they will be in 0.4 s)
-		if next(blocked) ~= nil and now - lastBlockCheck >= 0.1 then
-			lastBlockCheck = now
-			for part in pairs(blocked) do
-				if part.Parent then
-					local ahead = predicting() and part.AssemblyLinearVelocity * 0.4 or Vector3.zero
-					local rel = (part.CFrame + ahead):PointToObjectSpace(pos)
-					local half = part.Size / 2
-					if math.abs(rel.X) < half.X + 4 and math.abs(rel.Y) < half.Y + 4 and math.abs(rel.Z) < half.Z + 4
-						and now - lastBlockHit > 0.5 and safe[#safe] then
-						lastBlockHit = now
-						root.CFrame = safe[#safe].cf
-						root.AssemblyLinearVelocity = Vector3.zero
-						break
-					end
-				end
-			end
-		end
-
 		-- defence: losing health fast -> jump back to where you were a few seconds ago
 		if count("damage") + count("oneshot") + count("unknown") > 0 and now - lastEvade > 3 and hist[1] and safe[1]
 			and hist[1].h - hum.Health >= hum.MaxHealth * 0.3 and hum.Health < hum.MaxHealth * 0.6 then
@@ -311,29 +320,38 @@ local function watchCharacter(char)
 			root.AssemblyLinearVelocity = Vector3.zero
 		end
 
-		if not predicting() then return end
-
-		-- PREDICTION 1: someone/something that has hurt you before is closing in -> vanish to 9e9 for 1 s before it lands a hit
-		if now - lastThreat >= 0.1 then
+		-- AVOID: players who killed you are kept away from you right away (no need to wait for 10 deaths)
+		-- PREDICTION 1 (after 10 deaths): anything that has hurt you before and is closing in -> vanish before it lands a hit
+		if now - lastThreat >= 0.1 and (next(data.avoid) ~= nil or predicting()) then
 			lastThreat = now
 			local radius = 14
 			if data.kd.n > 0 then radius = math.clamp(data.kd.sum / data.kd.n * 1.2, 8, 25) end
 			local hasKnown = next(data.killers) ~= nil
 			for _, threat in ipairs(threatsNear(pos, 45, char)) do
-				local tool = threat.model:FindFirstChildOfClass("Tool")
-				local known = data.killers[threat.model.Name] ~= nil or (tool ~= nil and data.weapons[tool.Name] ~= nil)
-				if known or not hasKnown then
-					local rel = threat.root.Position - pos
-					local tvel = threat.root.AssemblyLinearVelocity
-					local closing = rel.Magnitude > 0.1 and -rel:Dot(tvel) / rel.Magnitude or 0
-					local futureDist = (rel + tvel * 0.5).Magnitude
-					if closing > 8 and futureDist < radius and now - lastDodge > 1.2 then
-						if vanish() then lastDodge = now + 1 end
+				local owner = Players:GetPlayerFromCharacter(threat.model)
+				if owner and data.avoid[owner.Name] then
+					if threat.dist < 30 and now - lastDodge > 1.2 then
+						if vanish(threat.root.Position) then lastDodge = now + 1 end
 						break
+					end
+				elseif predicting() then
+					local tool = threat.model:FindFirstChildOfClass("Tool")
+					local known = data.killers[threat.model.Name] ~= nil or (tool ~= nil and data.weapons[tool.Name] ~= nil)
+					if known or not hasKnown then
+						local rel = threat.root.Position - pos
+						local tvel = threat.root.AssemblyLinearVelocity
+						local closing = rel.Magnitude > 0.1 and -rel:Dot(tvel) / rel.Magnitude or 0
+						local futureDist = (rel + tvel * 0.5).Magnitude
+						if closing > 8 and futureDist < radius and now - lastDodge > 1.2 then
+							if vanish(threat.root.Position) then lastDodge = now + 1 end
+							break
+						end
 					end
 				end
 			end
 		end
+
+		if not predicting() then return end
 
 		-- PREDICTION 2: running off an edge into the void -> brake before you leave the ground
 		if count("void") > 0 and hum.FloorMaterial ~= Enum.Material.Air and vel.Magnitude > 6 then
@@ -386,10 +404,6 @@ local function adaptOff()
 	clearCharConnections()
 	pcall(function() StarterGui:SetCore("ResetButtonCallback", true) end)
 	if resetEvent then resetEvent:Destroy() resetEvent = nil end
-	for part in pairs(blocked) do
-		pcall(function() part.CanTouch = true end)
-	end
-	blocked = setmetatable({}, { __mode = "k" })
 end
 
 local function joinKeys(tbl, withCounts)
@@ -411,15 +425,16 @@ local function statusLines()
 	local defences = {}
 	if count("void") > 0 then table.insert(defences, "antivoid + void rescue") end
 	if count("fall") > 0 then table.insert(defences, "soft landing") end
-	if next(data.parts) ~= nil then table.insert(defences, "avoiding kill parts (" .. joinKeys(data.parts, false) .. ")") end
+	if next(data.parts) ~= nil then table.insert(defences, "deleting kill parts (" .. joinKeys(data.parts, false) .. ")") end
 	if count("damage") + count("oneshot") + count("unknown") > 0 then table.insert(defences, "health-drop retreat") end
 	table.insert(lines, "Defences: " .. (#defences > 0 and table.concat(defences, ", ") or "none yet"))
 
 	if predicting() then
-		table.insert(lines, "Attack prediction: ACTIVE (vanishes to 9e9 for 1 s when an attack is about to land, brakes at void edges, leads moving kill parts)")
+		table.insert(lines, "Attack prediction: ACTIVE (vanishes to 9e9 for 1 s when an attack is about to land, brakes at void edges)")
 	else
 		table.insert(lines, "Attack prediction: switches on after " .. PREDICT_AFTER .. " deaths (" .. (PREDICT_AFTER - data.deaths) .. " to go)")
 	end
+	if next(data.avoid) ~= nil then table.insert(lines, "Avoiding players (they killed you): " .. joinKeys(data.avoid, false)) end
 	if next(data.killers) ~= nil then table.insert(lines, "Seen near your deaths: " .. joinKeys(data.killers, true)) end
 	if next(data.weapons) ~= nil then table.insert(lines, "Weapons seen: " .. joinKeys(data.weapons, true)) end
 
@@ -433,17 +448,23 @@ local function statusLines()
 end
 
 -- `returnbydeath status` / `returnbydeath reset` use these
-local function adaptCommand(sub)
+local function adaptCommand(sub, arg)
 	if sub == "status" or sub == "deaths" then
 		if not enabled and data.deaths == 0 then load() end
 		return statusLines()
+	elseif sub == "forgive" then
+		local wanted = tostring(arg or ""):lower()
+		for name in pairs(data.avoid) do
+			if name:lower() == wanted then
+				data.avoid[name] = nil
+				save()
+				return "No longer avoiding " .. name .. "."
+			end
+		end
+		return "Usage: returnbydeath forgive <player name>  (not avoiding anyone by that name)"
 	elseif sub == "reset" then
 		data = freshData()
 		godmodeOffered = false
-		for part in pairs(blocked) do
-			pcall(function() part.CanTouch = true end)
-		end
-		blocked = setmetatable({}, { __mode = "k" })
 		save()
 		return "Adapt memory cleared."
 	end
@@ -673,14 +694,14 @@ do
 			turnOff()
 			return "Return by Death off. What it learned is kept."
 		end
-		local result = adaptCommand(sub)
+		local result = adaptCommand(sub, args[2])
 		if result then
 			if type(result) == "table" then
 				table.insert(result, 1, "Return by Death is " .. (enabled and "ON" or "OFF") .. ".")
 			end
 			return result
 		end
-		return "Usage: returnbydeath [on|off] | status | reset"
+		return "Usage: returnbydeath [on|off] | status | reset | forgive <player>"
 	end
 
 	-- used by `shutdown`
