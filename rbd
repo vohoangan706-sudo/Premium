@@ -1,25 +1,28 @@
 -- ======================================================================
---  AetherfinixAdapt  (standalone package for the Aetherfinix panel)
+--  Return by Death  (standalone package for the Aetherfinix panel)
 --  Host this file (raw URL) and put the URL in the panel's
---  PACKAGE_URLS.adapt slot. Then type:  adapt
+--  PACKAGE_URLS.returnbydeath slot. Then type:  returnbydeath
 --  Running this file by itself does nothing: the panel loads it.
 --
---  Also holds the `returnbydeath` command (returnbydeath [on|off]).
---  adapt [on|off] | status | reset
---  Quietly watches every death, works out what killed you (void, fall,
---  kill-part, damage, one-shot, unknown), remembers it (the death counter
---  is saved to AetherAdapt.json when your executor has writefile) and
---  builds a defence against that cause from then on:
---    void      -> turns antivoid on + rescues you back to your last safe spot
+--  returnbydeath [on|off] | status | reset
+--  Health hits 0 -> you are sent to the void (Y = -5000); when you respawn
+--  you are put back where you died with a sound and a revive animation.
+--
+--  It also LEARNS from every death (the adapt system is part of this command,
+--  not a separate one). It works out what killed you (void, fall, kill-part,
+--  damage, one-shot, unknown), counts deaths (saved to AetherAdapt.json when
+--  the executor has writefile) and builds a defence from then on:
+--    void kill -> antivoid is turned on + rescue back to your last safe spot
 --    fall      -> soft landings
---    kill part -> switches it off locally and keeps you away from it
---    damage    -> retreats when you lose health fast
---  After 10 deaths it also starts PREDICTING attacks (see below).
+--    kill part -> switched off locally and avoided
+--    damage    -> retreat when you lose health fast
+--  After 10 deaths it also PREDICTS attacks (teleports to 9e9 for 1 s when an attack is about to land,
+--  brakes at void edges, leads moving kill parts).
 --  The reset button still works and isn't counted as a death.
 -- ======================================================================
 local context = ...
 if type(context) ~= "table" then
-	warn("AetherfinixAdapt must be loaded by the Aetherfinix panel.")
+	warn("Return by Death must be loaded by the Aetherfinix panel.")
 	return
 end
 
@@ -161,29 +164,34 @@ local function watchCharacter(char)
 		end
 	end
 
-	local function groundBelow(pos)
-		return workspace:Raycast(pos + Vector3.new(0, 5, 0), Vector3.new(0, -40, 0), rayParams)
-	end
-
-	-- step away from an attacker that is closing in
-	local function dodge(from)
-		local pos = root.Position
-		local away = Vector3.new(pos.X - from.X, 0, pos.Z - from.Z)
-		if away.Magnitude < 0.1 then away = Vector3.new(1, 0, 0) end
-		away = away.Unit
-		local side = Vector3.new(-away.Z, 0, away.X)
-		local options = { side * 11, side * -11, away * 12 }
-		-- try the sidesteps in random order of side, retreat last
-		if math.random() < 0.5 then options[1], options[2] = options[2], options[1] end
-		for _, offset in ipairs(options) do
-			local target = pos + offset
-			if groundBelow(target) then
-				root.CFrame = root.CFrame - root.Position + target
-				root.AssemblyLinearVelocity = Vector3.zero
-				return true
+	-- an attack is about to land: hold the character at 9e9 on Heartbeat for 1 s, then bring it back
+	local vanished = false
+	local function vanish()
+		if vanished then return false end
+		vanished = true
+		local origin = root.CFrame
+		local far = CFrame.new(9e9, 9e9, 9e9)
+		local started = os.clock()
+		local conn
+		conn = RunService.Heartbeat:Connect(function()
+			if not root.Parent or hum.Health <= 0 then
+				conn:Disconnect()
+				vanished = false
+				return
 			end
-		end
-		return false
+			if os.clock() - started < 1 then
+				root.CFrame = far
+				root.AssemblyLinearVelocity = Vector3.zero
+				root.AssemblyAngularVelocity = Vector3.zero
+			else
+				conn:Disconnect()
+				root.CFrame = origin
+				root.AssemblyLinearVelocity = Vector3.zero
+				vanished = false
+			end
+		end)
+		table.insert(charConnections, conn)
+		return true
 	end
 
 	local function classify()
@@ -247,7 +255,7 @@ local function watchCharacter(char)
 	end))
 
 	table.insert(charConnections, RunService.Heartbeat:Connect(function()
-		if hum.Health <= 0 or not root.Parent then return end
+		if hum.Health <= 0 or not root.Parent or vanished then return end
 		local now = os.clock()
 		local vel = root.AssemblyLinearVelocity
 		local pos = root.Position
@@ -305,7 +313,7 @@ local function watchCharacter(char)
 
 		if not predicting() then return end
 
-		-- PREDICTION 1: someone/something that has hurt you before is closing in -> sidestep before it lands a hit
+		-- PREDICTION 1: someone/something that has hurt you before is closing in -> vanish to 9e9 for 1 s before it lands a hit
 		if now - lastThreat >= 0.1 then
 			lastThreat = now
 			local radius = 14
@@ -320,7 +328,7 @@ local function watchCharacter(char)
 					local closing = rel.Magnitude > 0.1 and -rel:Dot(tvel) / rel.Magnitude or 0
 					local futureDist = (rel + tvel * 0.5).Magnitude
 					if closing > 8 and futureDist < radius and now - lastDodge > 1.2 then
-						if dodge(threat.root.Position) then lastDodge = now end
+						if vanish() then lastDodge = now + 1 end
 						break
 					end
 				end
@@ -358,7 +366,7 @@ local function hookReset()
 	end)
 end
 
-local function turnOn()
+local function adaptOn()
 	if enabled then return end
 	enabled = true
 	load()
@@ -370,7 +378,7 @@ local function turnOn()
 	scanWorkspace()
 end
 
-local function turnOff()
+local function adaptOff()
 	if not enabled then return end
 	enabled = false
 	for _, c in ipairs(connections) do c:Disconnect() end
@@ -408,7 +416,7 @@ local function statusLines()
 	table.insert(lines, "Defences: " .. (#defences > 0 and table.concat(defences, ", ") or "none yet"))
 
 	if predicting() then
-		table.insert(lines, "Attack prediction: ACTIVE (sidesteps incoming attackers, brakes at void edges, leads moving kill parts)")
+		table.insert(lines, "Attack prediction: ACTIVE (vanishes to 9e9 for 1 s when an attack is about to land, brakes at void edges, leads moving kill parts)")
 	else
 		table.insert(lines, "Attack prediction: switches on after " .. PREDICT_AFTER .. " deaths (" .. (PREDICT_AFTER - data.deaths) .. " to go)")
 	end
@@ -424,18 +432,9 @@ local function statusLines()
 	return lines
 end
 
-commands["adapt"] = function(args)
-	local sub = tostring(args[1] or ""):lower()
-	if sub == "" then sub = enabled and "off" or "on" end
-	if sub == "on" then
-		if enabled then return "Adapt is already on." end
-		turnOn()
-		return "Adapt on. It watches your deaths quietly and builds defences. 'adapt status' shows what it learned."
-	elseif sub == "off" then
-		if not enabled then return "Adapt is already off." end
-		turnOff()
-		return "Adapt off. Its memory is kept."
-	elseif sub == "status" or sub == "deaths" then
+-- `returnbydeath status` / `returnbydeath reset` use these
+local function adaptCommand(sub)
+	if sub == "status" or sub == "deaths" then
 		if not enabled and data.deaths == 0 then load() end
 		return statusLines()
 	elseif sub == "reset" then
@@ -448,7 +447,6 @@ commands["adapt"] = function(args)
 		save()
 		return "Adapt memory cleared."
 	end
-	return "Usage: adapt [on|off] | status | reset"
 end
 
 -- ######################################################################
@@ -590,7 +588,10 @@ do
 		handled = true
 		local spot = root.CFrame
 		-- if you died by falling into the void, return to the last place you stood instead
-		if lastSafe and spot.Position.Y < workspace.FallenPartsDestroyHeight + 50 then spot = lastSafe end
+		if spot.Position.Y < workspace.FallenPartsDestroyHeight + 50 then
+			turnOnAntivoid() -- killed by the void: antivoid on
+			if lastSafe then spot = lastSafe end
+		end
 		deathCFrame = spot
 		pcall(function()
 			root.CFrame = CFrame.new(spot.Position.X, VOID_Y, spot.Position.Z)
@@ -644,6 +645,7 @@ do
 		if enabled then return end
 		enabled = true
 		deathCFrame = nil
+		adaptOn()
 		table.insert(connections, player.CharacterAdded:Connect(onCharacterAdded))
 		if player.Character then task.spawn(watchCharacter, player.Character) end
 	end
@@ -651,6 +653,7 @@ do
 	local function turnOff()
 		if not enabled then return end
 		enabled = false
+		adaptOff()
 		for _, c in ipairs(connections) do c:Disconnect() end
 		connections = {}
 		clearCharConnections()
@@ -664,27 +667,28 @@ do
 		if sub == "on" then
 			if enabled then return "Return by Death is already on." end
 			turnOn()
-			return "Return by Death on: if your health hits 0 you go to the void, then come back to where you died when you respawn. 'returnbydeath off' turns it off."
+			return "Return by Death on: if your health hits 0 you go to the void, then come back to where you died when you respawn. It also learns from every death (see 'returnbydeath status'). 'returnbydeath off' turns it off."
 		elseif sub == "off" then
 			if not enabled then return "Return by Death is already off." end
 			turnOff()
-			return "Return by Death off."
+			return "Return by Death off. What it learned is kept."
 		end
-		return "Usage: returnbydeath [on|off]"
+		local result = adaptCommand(sub)
+		if result then
+			if type(result) == "table" then
+				table.insert(result, 1, "Return by Death is " .. (enabled and "ON" or "OFF") .. ".")
+			end
+			return result
+		end
+		return "Usage: returnbydeath [on|off] | status | reset"
 	end
 
 	-- used by `shutdown`
 	commands["__returnbydeath_off"] = turnOff
 end
 
--- used by `shutdown`
-commands["__adapt_off"] = turnOff
-
-registerPackage("adapt", function()
-	if enabled then return "Adapt is already on." end
-	turnOn()
-	return "Adapt installed and on."
+registerPackage("returnbydeath", function()
+	return commands["returnbydeath"]({ "on" })
 end, function()
-	turnOff()
-	return "Adapt turned off."
+	return commands["returnbydeath"]({ "off" })
 end)
