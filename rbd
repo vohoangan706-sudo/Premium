@@ -4,7 +4,7 @@
 --  PACKAGE_URLS.returnbydeath slot. Then type:  returnbydeath
 --  Running this file by itself does nothing: the panel loads it.
 --
---  returnbydeath [on|off] | status | reset | forgive <player>
+--  returnbydeath [on|off] | status | reset | forgive <player> | hold <seconds>
 --  Health hits 0 -> you are sent to the void (Y = -5000); when you respawn
 --  you are put back where you died with a sound and a revive animation.
 --
@@ -58,6 +58,18 @@ data = freshData()
 local function count(cause) return data.causes[cause] or 0 end
 local function predicting() return data.deaths >= PREDICT_AFTER end
 
+-- body part names are never "kill parts" (a player's arm touching you is not a trap)
+local BODY_NAMES = {}
+for _, name in ipairs({ "Head", "Torso", "UpperTorso", "LowerTorso", "HumanoidRootPart", "Left Arm", "Right Arm", "Left Leg", "Right Leg",
+	"LeftUpperArm", "LeftLowerArm", "LeftHand", "RightUpperArm", "RightLowerArm", "RightHand",
+	"LeftUpperLeg", "LeftLowerLeg", "LeftFoot", "RightUpperLeg", "RightLowerLeg", "RightFoot", "Handle" }) do
+	BODY_NAMES[name] = true
+end
+
+local function purgeBodyNames()
+	for name in pairs(BODY_NAMES) do data.parts[name] = nil end
+end
+
 local function save()
 	if type(writefile) ~= "function" then return end
 	pcall(function() writefile(SAVE_FILE, HttpService:JSONEncode(data)) end)
@@ -74,6 +86,8 @@ local function load()
 		for _, key in ipairs({ "causes", "parts", "killers", "weapons", "avoid", "kd", "log" }) do
 			if type(d[key]) == "table" then data[key] = d[key] end
 		end
+		purgeBodyNames() -- older saves could contain 'Right Arm' etc.
+		data.hold = tonumber(d.hold)
 		data.kd.sum = tonumber(data.kd.sum) or 0
 		data.kd.n = tonumber(data.kd.n) or 0
 	end)
@@ -84,8 +98,19 @@ local function clearCharConnections()
 	charConnections = {}
 end
 
+-- the Humanoid model (a player or an NPC) a part belongs to, or nil
+local function characterOf(inst)
+	local model = inst:FindFirstAncestorOfClass("Model")
+	while model do
+		if model:FindFirstChildOfClass("Humanoid") then return model end
+		model = model.Parent and model.Parent:FindFirstAncestorOfClass("Model") or nil
+	end
+	return nil
+end
+
 local function consider(inst)
-	if inst:IsA("BasePart") and data.parts[inst.Name] and inst.Size.Magnitude <= MAX_DELETE_SIZE then
+	if inst:IsA("BasePart") and data.parts[inst.Name] and not BODY_NAMES[inst.Name] and not characterOf(inst)
+		and inst.Size.Magnitude <= MAX_DELETE_SIZE then
 		pcall(function() inst:Destroy() end) -- deleted on your client only
 	end
 end
@@ -161,12 +186,14 @@ local function watchCharacter(char)
 		if part:IsA("BasePart") then
 			table.insert(charConnections, part.Touched:Connect(function(other)
 				if other:IsDescendantOf(char) or other:IsA("Terrain") then return end
-				lastTouch = { part = other, time = os.clock() }
+				lastTouch = { part = other, time = os.clock(), owner = characterOf(other) }
 			end))
 		end
 	end
 
-	-- an attack is about to land: hold the character at 9e9 on Heartbeat for 1 s, then bring it back
+	-- an attack is about to land: hold the character at 9e9 (Heartbeat + Stepped, anchored so nothing
+	-- pulls it back) for the hold time, then bring it back. The hold time is 1 s unless you set
+	-- `returnbydeath hold <seconds>`
 	local vanished = false
 	local function vanish(fromPos)
 		if vanished then return false end
@@ -183,26 +210,40 @@ local function watchCharacter(char)
 			end
 		end
 		local far = CFrame.new(9e9, 9e9, 9e9)
+		local holdTime = data.hold or 1
+		local wasAnchored = root.Anchored
 		local started = os.clock()
-		local conn
-		conn = RunService.Heartbeat:Connect(function()
+		local conns = {}
+		local function stop()
+			for _, c in ipairs(conns) do c:Disconnect() end
+			vanished = false
+		end
+		local function hold()
 			if not root.Parent or hum.Health <= 0 then
-				conn:Disconnect()
-				vanished = false
-				return
+				stop()
+				return false
 			end
-			if os.clock() - started < 1 then
-				root.CFrame = far
-				root.AssemblyLinearVelocity = Vector3.zero
-				root.AssemblyAngularVelocity = Vector3.zero
+			root.CFrame = far
+			root.AssemblyLinearVelocity = Vector3.zero
+			root.AssemblyAngularVelocity = Vector3.zero
+			return true
+		end
+		root.Anchored = true
+		table.insert(conns, RunService.Stepped:Connect(function()
+			if vanished then hold() end
+		end))
+		table.insert(conns, RunService.Heartbeat:Connect(function()
+			if not vanished then return end
+			if os.clock() - started < holdTime then
+				hold()
 			else
-				conn:Disconnect()
+				stop()
+				root.Anchored = wasAnchored
 				root.CFrame = origin
 				root.AssemblyLinearVelocity = Vector3.zero
-				vanished = false
 			end
-		end)
-		table.insert(charConnections, conn)
+		end))
+		for _, c in ipairs(conns) do table.insert(charConnections, c) end
 		return true
 	end
 
@@ -230,7 +271,8 @@ local function watchCharacter(char)
 			record("fall", "landing speed " .. math.floor(-minVy))
 			return
 		end
-		if lastTouch and now - lastTouch.time < 0.5 and lastTouch.part.Parent then
+		if lastTouch and now - lastTouch.time < 0.5 and lastTouch.part.Parent and not lastTouch.owner
+			and not BODY_NAMES[lastTouch.part.Name] then
 			local name = lastTouch.part.Name
 			data.parts[name] = (data.parts[name] or 0) + 1
 			record("touch", name)
@@ -257,6 +299,9 @@ local function watchCharacter(char)
 		local tag = hum:FindFirstChild("creator")
 		if tag and typeof(tag.Value) == "Instance" and tag.Value:IsA("Player") and tag.Value ~= player then
 			killerPlayer = tag.Value
+		elseif lastTouch and lastTouch.owner and now - lastTouch.time < 1 and Players:GetPlayerFromCharacter(lastTouch.owner)
+			and Players:GetPlayerFromCharacter(lastTouch.owner) ~= player then
+			killerPlayer = Players:GetPlayerFromCharacter(lastTouch.owner)
 		elseif nearest and bestDist <= KILLER_GUESS_RADIUS then
 			local p = Players:GetPlayerFromCharacter(nearest.model)
 			if p and p ~= player then killerPlayer = p end
@@ -388,6 +433,7 @@ local function adaptOn()
 	if enabled then return end
 	enabled = true
 	load()
+	purgeBodyNames()
 	if count("void") > 0 then turnOnAntivoid() end
 	hookReset()
 	table.insert(connections, workspace.DescendantAdded:Connect(consider))
@@ -452,6 +498,12 @@ local function adaptCommand(sub, arg)
 	if sub == "status" or sub == "deaths" then
 		if not enabled and data.deaths == 0 then load() end
 		return statusLines()
+	elseif sub == "hold" then
+		local seconds = tonumber(arg)
+		if not seconds then return "Usage: returnbydeath hold <seconds>  (how long you stay at 9e9 when avoiding an attack; now " .. tostring(data.hold or 1) .. ")" end
+		data.hold = math.clamp(seconds, 0.1, 1e9)
+		save()
+		return "You will now stay at 9e9 for " .. data.hold .. " s when avoiding an attack."
 	elseif sub == "forgive" then
 		local wanted = tostring(arg or ""):lower()
 		for name in pairs(data.avoid) do
@@ -701,7 +753,7 @@ do
 			end
 			return result
 		end
-		return "Usage: returnbydeath [on|off] | status | reset | forgive <player>"
+		return "Usage: returnbydeath [on|off] | status | reset | forgive <player> | hold <seconds>"
 	end
 
 	-- used by `shutdown`
