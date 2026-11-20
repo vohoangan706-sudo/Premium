@@ -1,0 +1,690 @@
+-- ======================================================================
+--  AetherfinixAdapt  (standalone package for the Aetherfinix panel)
+--  Host this file (raw URL) and put the URL in the panel's
+--  PACKAGE_URLS.adapt slot. Then type:  adapt
+--  Running this file by itself does nothing: the panel loads it.
+--
+--  Also holds the `returnbydeath` command (returnbydeath [on|off]).
+--  adapt [on|off] | status | reset
+--  Quietly watches every death, works out what killed you (void, fall,
+--  kill-part, damage, one-shot, unknown), remembers it (the death counter
+--  is saved to AetherAdapt.json when your executor has writefile) and
+--  builds a defence against that cause from then on:
+--    void      -> turns antivoid on + rescues you back to your last safe spot
+--    fall      -> soft landings
+--    kill part -> switches it off locally and keeps you away from it
+--    damage    -> retreats when you lose health fast
+--  After 10 deaths it also starts PREDICTING attacks (see below).
+--  The reset button still works and isn't counted as a death.
+-- ======================================================================
+local context = ...
+if type(context) ~= "table" then
+	warn("AetherfinixAdapt must be loaded by the Aetherfinix panel.")
+	return
+end
+
+local player = context.player
+local commands = context.commands
+local registerPackage = context.registerPackage
+local screenGui = context.screenGui
+
+local RunService = game:GetService("RunService")
+local HttpService = game:GetService("HttpService")
+local StarterGui = game:GetService("StarterGui")
+
+local SAVE_FILE = "AetherAdapt.json"
+local PREDICT_AFTER = 10 -- deaths before the attack-prediction system switches on
+
+local enabled = false
+local data = nil
+local connections = {}
+local charConnections = {}
+local blocked = setmetatable({}, { __mode = "k" }) -- kill parts we switched off locally
+local resetEvent = nil
+local resetPressed = false
+local godmodeOffered = false
+
+local function freshData()
+	return { deaths = 0, resets = 0, causes = {}, parts = {}, killers = {}, weapons = {}, kd = { sum = 0, n = 0 }, log = {} }
+end
+data = freshData()
+
+local function count(cause) return data.causes[cause] or 0 end
+local function predicting() return data.deaths >= PREDICT_AFTER end
+
+local function save()
+	if type(writefile) ~= "function" then return end
+	pcall(function() writefile(SAVE_FILE, HttpService:JSONEncode(data)) end)
+end
+
+local function load()
+	if type(readfile) ~= "function" or type(isfile) ~= "function" then return end
+	pcall(function()
+		if not isfile(SAVE_FILE) then return end
+		local d = HttpService:JSONDecode(readfile(SAVE_FILE))
+		if type(d) ~= "table" then return end
+		data.deaths = tonumber(d.deaths) or 0
+		data.resets = tonumber(d.resets) or 0
+		for _, key in ipairs({ "causes", "parts", "killers", "weapons", "kd", "log" }) do
+			if type(d[key]) == "table" then data[key] = d[key] end
+		end
+		data.kd.sum = tonumber(data.kd.sum) or 0
+		data.kd.n = tonumber(data.kd.n) or 0
+	end)
+end
+
+local function clearCharConnections()
+	for _, c in ipairs(charConnections) do c:Disconnect() end
+	charConnections = {}
+end
+
+local function consider(inst)
+	if inst:IsA("BasePart") and data.parts[inst.Name] then
+		blocked[inst] = true
+		pcall(function() inst.CanTouch = false end)
+	end
+end
+
+local function scanWorkspace()
+	task.spawn(function()
+		local n = 0
+		for _, d in ipairs(workspace:GetDescendants()) do
+			if not enabled then return end
+			consider(d)
+			n = n + 1
+			if n % 1500 == 0 then task.wait() end
+		end
+	end)
+end
+
+local function turnOnAntivoid()
+	if commands["antivoid"] then pcall(commands["antivoid"], {}) end
+end
+
+-- other characters (players and NPCs) with a Humanoid within `radius` of `pos`
+local function threatsNear(pos, radius, ownChar)
+	local found, seen = {}, {}
+	local params = OverlapParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = { ownChar }
+	local ok, parts = pcall(function() return workspace:GetPartBoundsInRadius(pos, radius, params) end)
+	if not ok then return found end
+	for _, part in ipairs(parts) do
+		local model = part:FindFirstAncestorOfClass("Model")
+		if model and not seen[model] then
+			seen[model] = true
+			local hum = model:FindFirstChildOfClass("Humanoid")
+			local r = model:FindFirstChild("HumanoidRootPart")
+			if hum and r and hum.Health > 0 then
+				table.insert(found, { model = model, root = r, dist = (r.Position - pos).Magnitude })
+			end
+		end
+	end
+	return found
+end
+
+local function record(cause, detail)
+	data.deaths = data.deaths + 1
+	data.causes[cause] = count(cause) + 1
+	table.insert(data.log, { os.time(), cause, detail or "" })
+	while #data.log > 12 do table.remove(data.log, 1) end
+	save()
+	if cause == "void" then turnOnAntivoid() end
+	-- health-based deaths can't be stopped from the client: offer the real godmode once
+	local unguardable = count("damage") + count("oneshot") + count("unknown")
+	if unguardable >= 3 and not godmodeOffered and commands["godmode"] then
+		godmodeOffered = true
+		pcall(commands["godmode"], {})
+	end
+end
+
+local function watchCharacter(char)
+	clearCharConnections()
+	local hum = char:WaitForChild("Humanoid", 5)
+	local root = char:WaitForChild("HumanoidRootPart", 5)
+	if not (enabled and hum and root) then return end
+
+	local hist, safe = {}, {}
+	local classified = false
+	local lastTouch = nil
+	local lastSample, lastEvade, lastBlockCheck, lastBlockHit, lastThreat, lastDodge = 0, 0, 0, 0, 0, 0
+	local rayParams = RaycastParams.new()
+	rayParams.FilterType = Enum.RaycastFilterType.Exclude
+	rayParams.FilterDescendantsInstances = { char }
+
+	for _, part in ipairs(char:GetDescendants()) do
+		if part:IsA("BasePart") then
+			table.insert(charConnections, part.Touched:Connect(function(other)
+				if other:IsDescendantOf(char) or other:IsA("Terrain") then return end
+				lastTouch = { part = other, time = os.clock() }
+			end))
+		end
+	end
+
+	local function groundBelow(pos)
+		return workspace:Raycast(pos + Vector3.new(0, 5, 0), Vector3.new(0, -40, 0), rayParams)
+	end
+
+	-- step away from an attacker that is closing in
+	local function dodge(from)
+		local pos = root.Position
+		local away = Vector3.new(pos.X - from.X, 0, pos.Z - from.Z)
+		if away.Magnitude < 0.1 then away = Vector3.new(1, 0, 0) end
+		away = away.Unit
+		local side = Vector3.new(-away.Z, 0, away.X)
+		local options = { side * 11, side * -11, away * 12 }
+		-- try the sidesteps in random order of side, retreat last
+		if math.random() < 0.5 then options[1], options[2] = options[2], options[1] end
+		for _, offset in ipairs(options) do
+			local target = pos + offset
+			if groundBelow(target) then
+				root.CFrame = root.CFrame - root.Position + target
+				root.AssemblyLinearVelocity = Vector3.zero
+				return true
+			end
+		end
+		return false
+	end
+
+	local function classify()
+		if classified then return end
+		classified = true
+		if resetPressed then
+			data.resets = data.resets + 1
+			save()
+			return
+		end
+		local last = hist[#hist]
+		local pos = last and last.pos or root.Position
+		local now = os.clock()
+
+		if pos.Y < -350 then
+			record("void", "fell below the map")
+			return
+		end
+		local minVy = 0
+		for _, s in ipairs(hist) do
+			if now - s.t < 0.5 and s.vy < minVy then minVy = s.vy end
+		end
+		if minVy <= -60 then
+			record("fall", "landing speed " .. math.floor(-minVy))
+			return
+		end
+		if lastTouch and now - lastTouch.time < 0.5 and lastTouch.part.Parent then
+			local name = lastTouch.part.Name
+			data.parts[name] = (data.parts[name] or 0) + 1
+			record("touch", name)
+			scanWorkspace()
+			return
+		end
+
+		-- who (or what) was next to you: remember the name, the distance and its weapon
+		local killerName = ""
+		local nearest, bestDist = nil, 40
+		for _, threat in ipairs(threatsNear(pos, 40, char)) do
+			if threat.dist < bestDist then nearest, bestDist = threat, threat.dist end
+		end
+		if nearest then
+			killerName = nearest.model.Name
+			data.killers[killerName] = (data.killers[killerName] or 0) + 1
+			data.kd.sum = data.kd.sum + bestDist
+			data.kd.n = data.kd.n + 1
+			local tool = nearest.model:FindFirstChildOfClass("Tool")
+			if tool then data.weapons[tool.Name] = (data.weapons[tool.Name] or 0) + 1 end
+		end
+		if last and last.h >= hum.MaxHealth * 0.75 then
+			record("oneshot", killerName)
+		elseif hist[1] and last and hist[1].h > last.h + 0.5 then
+			record("damage", killerName)
+		else
+			record("unknown", killerName)
+		end
+	end
+
+	table.insert(charConnections, hum.Died:Connect(classify))
+	table.insert(charConnections, hum.HealthChanged:Connect(function(h)
+		if h <= 0 then classify() end
+	end))
+
+	table.insert(charConnections, RunService.Heartbeat:Connect(function()
+		if hum.Health <= 0 or not root.Parent then return end
+		local now = os.clock()
+		local vel = root.AssemblyLinearVelocity
+		local pos = root.Position
+
+		table.insert(hist, { t = now, h = hum.Health, vy = vel.Y, pos = pos })
+		while #hist > 0 and now - hist[1].t > 1.5 do table.remove(hist, 1) end
+
+		if now - lastSample >= 0.25 then
+			lastSample = now
+			if hum.FloorMaterial ~= Enum.Material.Air and pos.Y > -300 then
+				table.insert(safe, { t = now, cf = root.CFrame })
+				while #safe > 16 do table.remove(safe, 1) end
+			end
+		end
+
+		-- defence: void
+		if count("void") > 0 and pos.Y < -380 and safe[#safe] then
+			root.CFrame = safe[#safe].cf + Vector3.new(0, 3, 0)
+			root.AssemblyLinearVelocity = Vector3.zero
+			return
+		end
+
+		-- defence: hard landing
+		if count("fall") > 0 and vel.Y < -45 then
+			local hit = workspace:Raycast(pos, Vector3.new(0, -(-vel.Y * 0.1 + 5), 0), rayParams)
+			if hit then root.AssemblyLinearVelocity = Vector3.new(vel.X, 0, vel.Z) end
+		end
+
+		-- defence: kill parts that already killed you (moving ones are checked where they will be in 0.4 s)
+		if next(blocked) ~= nil and now - lastBlockCheck >= 0.1 then
+			lastBlockCheck = now
+			for part in pairs(blocked) do
+				if part.Parent then
+					local ahead = predicting() and part.AssemblyLinearVelocity * 0.4 or Vector3.zero
+					local rel = (part.CFrame + ahead):PointToObjectSpace(pos)
+					local half = part.Size / 2
+					if math.abs(rel.X) < half.X + 4 and math.abs(rel.Y) < half.Y + 4 and math.abs(rel.Z) < half.Z + 4
+						and now - lastBlockHit > 0.5 and safe[#safe] then
+						lastBlockHit = now
+						root.CFrame = safe[#safe].cf
+						root.AssemblyLinearVelocity = Vector3.zero
+						break
+					end
+				end
+			end
+		end
+
+		-- defence: losing health fast -> jump back to where you were a few seconds ago
+		if count("damage") + count("oneshot") + count("unknown") > 0 and now - lastEvade > 3 and hist[1] and safe[1]
+			and hist[1].h - hum.Health >= hum.MaxHealth * 0.3 and hum.Health < hum.MaxHealth * 0.6 then
+			lastEvade = now
+			root.CFrame = safe[1].cf
+			root.AssemblyLinearVelocity = Vector3.zero
+		end
+
+		if not predicting() then return end
+
+		-- PREDICTION 1: someone/something that has hurt you before is closing in -> sidestep before it lands a hit
+		if now - lastThreat >= 0.1 then
+			lastThreat = now
+			local radius = 14
+			if data.kd.n > 0 then radius = math.clamp(data.kd.sum / data.kd.n * 1.2, 8, 25) end
+			local hasKnown = next(data.killers) ~= nil
+			for _, threat in ipairs(threatsNear(pos, 45, char)) do
+				local tool = threat.model:FindFirstChildOfClass("Tool")
+				local known = data.killers[threat.model.Name] ~= nil or (tool ~= nil and data.weapons[tool.Name] ~= nil)
+				if known or not hasKnown then
+					local rel = threat.root.Position - pos
+					local tvel = threat.root.AssemblyLinearVelocity
+					local closing = rel.Magnitude > 0.1 and -rel:Dot(tvel) / rel.Magnitude or 0
+					local futureDist = (rel + tvel * 0.5).Magnitude
+					if closing > 8 and futureDist < radius and now - lastDodge > 1.2 then
+						if dodge(threat.root.Position) then lastDodge = now end
+						break
+					end
+				end
+			end
+		end
+
+		-- PREDICTION 2: running off an edge into the void -> brake before you leave the ground
+		if count("void") > 0 and hum.FloorMaterial ~= Enum.Material.Air and vel.Magnitude > 6 then
+			local flat = Vector3.new(vel.X, 0, vel.Z)
+			if flat.Magnitude > 6 then
+				local ahead = pos + flat.Unit * math.max(flat.Magnitude * 0.35, 5)
+				local hit = workspace:Raycast(ahead, Vector3.new(0, -300, 0), rayParams)
+				if not hit then root.AssemblyLinearVelocity = Vector3.new(0, vel.Y, 0) end
+			end
+		end
+	end))
+end
+
+local function hookReset()
+	pcall(function()
+		resetEvent = Instance.new("BindableEvent")
+		table.insert(connections, resetEvent.Event:Connect(function()
+			resetPressed = true
+			task.delay(3, function() resetPressed = false end)
+			local char = player.Character
+			if char then
+				pcall(function()
+					local h = char:FindFirstChildOfClass("Humanoid")
+					if h then h.Health = 0 end
+					char:BreakJoints()
+				end)
+			end
+		end))
+		StarterGui:SetCore("ResetButtonCallback", resetEvent)
+	end)
+end
+
+local function turnOn()
+	if enabled then return end
+	enabled = true
+	load()
+	if count("void") > 0 then turnOnAntivoid() end
+	hookReset()
+	table.insert(connections, workspace.DescendantAdded:Connect(consider))
+	table.insert(connections, player.CharacterAdded:Connect(function(char) task.spawn(watchCharacter, char) end))
+	if player.Character then task.spawn(watchCharacter, player.Character) end
+	scanWorkspace()
+end
+
+local function turnOff()
+	if not enabled then return end
+	enabled = false
+	for _, c in ipairs(connections) do c:Disconnect() end
+	connections = {}
+	clearCharConnections()
+	pcall(function() StarterGui:SetCore("ResetButtonCallback", true) end)
+	if resetEvent then resetEvent:Destroy() resetEvent = nil end
+	for part in pairs(blocked) do
+		pcall(function() part.CanTouch = true end)
+	end
+	blocked = setmetatable({}, { __mode = "k" })
+end
+
+local function joinKeys(tbl, withCounts)
+	local list = {}
+	for name, n in pairs(tbl) do
+		table.insert(list, withCounts and (name .. " x" .. n) or name)
+	end
+	return table.concat(list, ", ")
+end
+
+local function statusLines()
+	local lines = { "Adapt is " .. (enabled and "ON" or "OFF") .. ".", "Deaths: " .. data.deaths .. "   Resets: " .. data.resets }
+	local parts = {}
+	for _, cause in ipairs({ "void", "fall", "touch", "oneshot", "damage", "unknown" }) do
+		if count(cause) > 0 then table.insert(parts, cause .. " x" .. count(cause)) end
+	end
+	table.insert(lines, "Causes: " .. (#parts > 0 and table.concat(parts, ", ") or "none yet"))
+
+	local defences = {}
+	if count("void") > 0 then table.insert(defences, "antivoid + void rescue") end
+	if count("fall") > 0 then table.insert(defences, "soft landing") end
+	if next(data.parts) ~= nil then table.insert(defences, "avoiding kill parts (" .. joinKeys(data.parts, false) .. ")") end
+	if count("damage") + count("oneshot") + count("unknown") > 0 then table.insert(defences, "health-drop retreat") end
+	table.insert(lines, "Defences: " .. (#defences > 0 and table.concat(defences, ", ") or "none yet"))
+
+	if predicting() then
+		table.insert(lines, "Attack prediction: ACTIVE (sidesteps incoming attackers, brakes at void edges, leads moving kill parts)")
+	else
+		table.insert(lines, "Attack prediction: switches on after " .. PREDICT_AFTER .. " deaths (" .. (PREDICT_AFTER - data.deaths) .. " to go)")
+	end
+	if next(data.killers) ~= nil then table.insert(lines, "Seen near your deaths: " .. joinKeys(data.killers, true)) end
+	if next(data.weapons) ~= nil then table.insert(lines, "Weapons seen: " .. joinKeys(data.weapons, true)) end
+
+	for i = math.max(1, #data.log - 4), #data.log do
+		local e = data.log[i]
+		if type(e) == "table" then
+			table.insert(lines, "  - " .. tostring(e[2]) .. ((e[3] and e[3] ~= "") and (" (" .. tostring(e[3]) .. ")") or ""))
+		end
+	end
+	return lines
+end
+
+commands["adapt"] = function(args)
+	local sub = tostring(args[1] or ""):lower()
+	if sub == "" then sub = enabled and "off" or "on" end
+	if sub == "on" then
+		if enabled then return "Adapt is already on." end
+		turnOn()
+		return "Adapt on. It watches your deaths quietly and builds defences. 'adapt status' shows what it learned."
+	elseif sub == "off" then
+		if not enabled then return "Adapt is already off." end
+		turnOff()
+		return "Adapt off. Its memory is kept."
+	elseif sub == "status" or sub == "deaths" then
+		if not enabled and data.deaths == 0 then load() end
+		return statusLines()
+	elseif sub == "reset" then
+		data = freshData()
+		godmodeOffered = false
+		for part in pairs(blocked) do
+			pcall(function() part.CanTouch = true end)
+		end
+		blocked = setmetatable({}, { __mode = "k" })
+		save()
+		return "Adapt memory cleared."
+	end
+	return "Usage: adapt [on|off] | status | reset"
+end
+
+-- ######################################################################
+-- #  RETURNBYDEATH  (the `returnbydeath` command)
+-- #  returnbydeath [on|off]   toggles it
+-- #  When your health hits 0 you are sent to the void (Y = -5000). When you
+-- #  respawn you are teleported back to the spot where you died, a sound plays,
+-- #  and your body parts fly together into your torso like a revival.
+-- #  The fly-together animation and the sound are on your screen only.
+-- #  All locals live inside this do-block (no top-level locals added).
+-- ######################################################################
+do
+	local Players = game:GetService("Players")
+	local RunService = game:GetService("RunService")
+	local SoundService = game:GetService("SoundService")
+	local TweenService = game:GetService("TweenService")
+
+	local VOID_Y = -5000
+	local SOUND_ID = "rbxassetid://139203439169314"
+	local ANIM_TIME = 1.1 -- seconds for the body parts to fly together
+	local rng = Random.new()
+
+	local enabled = false
+	local connections = {} -- while the command is on
+	local charConnections = {} -- for the current character only
+	local deathCFrame = nil -- where you died, until you respawn
+	local lastSafe = nil -- the last place you stood alive, not in the void
+	local handled = false -- this character's death was already handled
+	local fx = nil -- the revive animation that is running (nil = none)
+
+	local function clearCharConnections()
+		for _, c in ipairs(charConnections) do c:Disconnect() end
+		charConnections = {}
+	end
+
+	local function stopFx()
+		local a = fx
+		if not a then return end
+		fx = nil
+		if a.heartbeat then a.heartbeat:Disconnect() end
+		for _, item in ipairs(a.items) do
+			if item.part.Parent then item.part.LocalTransparencyModifier = 0 end
+		end
+		if a.root and a.root.Parent then a.root.Anchored = a.wasAnchored end
+		if a.folder then a.folder:Destroy() end
+	end
+
+	local function flash()
+		local gui = Instance.new("ScreenGui")
+		gui.Name = "AetherReviveFlash"
+		gui.ResetOnSpawn = false
+		gui.IgnoreGuiInset = true
+		gui.DisplayOrder = 95
+		gui.Parent = screenGui.Parent
+		local frame = Instance.new("Frame")
+		frame.Size = UDim2.new(1, 0, 1, 0)
+		frame.BackgroundColor3 = Color3.new(1, 1, 1)
+		frame.BackgroundTransparency = 0.25
+		frame.BorderSizePixel = 0
+		frame.Active = false
+		frame.Parent = gui
+		TweenService:Create(frame, TweenInfo.new(0.6), { BackgroundTransparency = 1 }):Play()
+		task.delay(0.7, function() gui:Destroy() end)
+	end
+
+	local function playSound()
+		local sound = Instance.new("Sound")
+		sound.SoundId = SOUND_ID
+		sound.Volume = 1
+		sound.Parent = SoundService
+		sound:Play()
+		sound.Ended:Connect(function() sound:Destroy() end)
+		task.delay(15, function()
+			if sound.Parent then sound:Destroy() end
+		end)
+	end
+
+	-- the revive animation: scattered copies of your body parts fly into place, then a white flash
+	local function playRevive(char)
+		stopFx()
+		local root = char:FindFirstChild("HumanoidRootPart")
+		if not root then return end
+
+		local a = { items = {}, root = root, wasAnchored = root.Anchored, born = os.clock() }
+		a.folder = Instance.new("Folder")
+		a.folder.Name = "ReturnByDeathFx"
+		a.folder.Parent = workspace
+		fx = a
+
+		for _, part in ipairs(char:GetDescendants()) do
+			if part:IsA("BasePart") and part ~= root and part.Transparency < 1 then
+				local copy = part:Clone()
+				if copy then
+					for _, child in ipairs(copy:GetChildren()) do
+						if child:IsA("JointInstance") or child:IsA("WeldConstraint") or child:IsA("LuaSourceContainer")
+							or child:IsA("Attachment") or child:IsA("ParticleEmitter") or child:IsA("Trail")
+							or child:IsA("Beam") or child:IsA("Sound") or child:IsA("BillboardGui") then
+							child:Destroy()
+						end
+					end
+					copy.Anchored = true
+					copy.CanCollide = false
+					copy.CanTouch = false
+					copy.CanQuery = false
+					copy.CastShadow = false
+					local direction = Vector3.new(rng:NextNumber(-1, 1), rng:NextNumber(-0.3, 1), rng:NextNumber(-1, 1))
+					if direction.Magnitude < 0.1 then direction = Vector3.new(0, 1, 0) end
+					local start = part.CFrame * CFrame.new(direction.Unit * rng:NextNumber(6, 14))
+						* CFrame.Angles(rng:NextNumber(-3, 3), rng:NextNumber(-3, 3), rng:NextNumber(-3, 3))
+					copy.CFrame = start
+					copy.Parent = a.folder
+					part.LocalTransparencyModifier = 1
+					table.insert(a.items, { copy = copy, part = part, start = start })
+				end
+			end
+		end
+
+		root.Anchored = true -- hold still while the parts come together
+		a.heartbeat = RunService.Heartbeat:Connect(function()
+			if fx ~= a then return end
+			local t = (os.clock() - a.born) / ANIM_TIME
+			if t >= 1 then
+				stopFx()
+				flash()
+				return
+			end
+			local eased = t < 0.5 and 2 * t * t or 1 - (-2 * t + 2) ^ 2 / 2
+			for _, item in ipairs(a.items) do
+				if item.part.Parent and item.copy.Parent then
+					item.copy.CFrame = item.start:Lerp(item.part.CFrame, eased)
+				end
+			end
+		end)
+	end
+
+	-- health hit 0: remember the spot, then send the body to the void
+	local function onDeath(root)
+		if handled then return end
+		handled = true
+		local spot = root.CFrame
+		-- if you died by falling into the void, return to the last place you stood instead
+		if lastSafe and spot.Position.Y < workspace.FallenPartsDestroyHeight + 50 then spot = lastSafe end
+		deathCFrame = spot
+		pcall(function()
+			root.CFrame = CFrame.new(spot.Position.X, VOID_Y, spot.Position.Z)
+			root.AssemblyLinearVelocity = Vector3.zero
+		end)
+	end
+
+	local function watchCharacter(char)
+		clearCharConnections()
+		handled = false
+		local humanoid = char:WaitForChild("Humanoid", 5)
+		local root = char:WaitForChild("HumanoidRootPart", 5)
+		if not (enabled and humanoid and root) then return end
+
+		local function check()
+			if humanoid.Health <= 0 then onDeath(root) end
+		end
+		table.insert(charConnections, humanoid.HealthChanged:Connect(check))
+		table.insert(charConnections, humanoid.Died:Connect(check))
+		table.insert(charConnections, RunService.Heartbeat:Connect(function()
+			if humanoid.Health > 0 and root.Parent and root.Position.Y > workspace.FallenPartsDestroyHeight + 100 then
+				lastSafe = root.CFrame
+			end
+		end))
+		check()
+	end
+
+	local function onCharacterAdded(char)
+		task.spawn(watchCharacter, char)
+		if not deathCFrame then return end
+		local target = deathCFrame
+		deathCFrame = nil
+		task.spawn(function()
+			local root = char:WaitForChild("HumanoidRootPart", 5)
+			if not root then return end
+			task.wait(0.25) -- let the game finish putting you at its spawn point
+			if not (enabled and char.Parent) then return end
+			root.CFrame = target
+			root.AssemblyLinearVelocity = Vector3.zero
+			playSound()
+			playRevive(char)
+			task.wait(0.4)
+			-- if the game moved you again while loading, put you back
+			if enabled and char.Parent and root.Parent and (root.Position - target.Position).Magnitude > 15 then
+				root.CFrame = target
+			end
+		end)
+	end
+
+	local function turnOn()
+		if enabled then return end
+		enabled = true
+		deathCFrame = nil
+		table.insert(connections, player.CharacterAdded:Connect(onCharacterAdded))
+		if player.Character then task.spawn(watchCharacter, player.Character) end
+	end
+
+	local function turnOff()
+		if not enabled then return end
+		enabled = false
+		for _, c in ipairs(connections) do c:Disconnect() end
+		connections = {}
+		clearCharConnections()
+		stopFx()
+		deathCFrame = nil
+	end
+
+	commands["returnbydeath"] = function(args)
+		local sub = tostring(args[1] or ""):lower()
+		if sub == "" then sub = enabled and "off" or "on" end
+		if sub == "on" then
+			if enabled then return "Return by Death is already on." end
+			turnOn()
+			return "Return by Death on: if your health hits 0 you go to the void, then come back to where you died when you respawn. 'returnbydeath off' turns it off."
+		elseif sub == "off" then
+			if not enabled then return "Return by Death is already off." end
+			turnOff()
+			return "Return by Death off."
+		end
+		return "Usage: returnbydeath [on|off]"
+	end
+
+	-- used by `shutdown`
+	commands["__returnbydeath_off"] = turnOff
+end
+
+-- used by `shutdown`
+commands["__adapt_off"] = turnOff
+
+registerPackage("adapt", function()
+	if enabled then return "Adapt is already on." end
+	turnOn()
+	return "Adapt installed and on."
+end, function()
+	turnOff()
+	return "Adapt turned off."
+end)
