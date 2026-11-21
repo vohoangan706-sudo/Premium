@@ -54,7 +54,6 @@ local DASH_ID     = "10479335397"      -- the game's Q dash animation
 local LOOP_DELAY     = 0.3     -- Loop dash: seconds after the uppercut animation starts
 local LOOP_TIME      = 0.7     -- Loop dash: seconds for the circling dash
 local LOOP_SWEEP     = 360     -- Loop dash: degrees travelled around the target
-local LOOP_GAP       = 3       -- Loop dash: studs BELOW the target that you circle at
 local LOOP_RADIUS    = 5       -- Loop dash: radius of the circle under the target (studs)
 local LOOP_HOLD      = 0.2     -- Loop dash: seconds you stay under them afterwards
 local KIBA_DELAY    = 0.3     -- Kiba: seconds after the uppercut animation starts, then dash + flick
@@ -326,7 +325,7 @@ local function runKiba(target, chained)
 	busy = false
 end
 
--- Loop dash: uppercut > LOOP_DELAY > a full 360 degree dash around the target, circling LOOP_GAP studs BELOW them
+-- Loop dash: uppercut > LOOP_DELAY > a full 360 degree dash ON THE GROUND around the spot right under the airborne target (fixed, does not follow them)
 local function runLoop(target)
 	if busy then return end
 	busy = true
@@ -336,17 +335,18 @@ local function runLoop(target)
 		if not r or not tRoot then return end
 		local off = Vector3.new(r.Position.X - tRoot.Position.X, 0, r.Position.Z - tRoot.Position.Z)
 		local a0 = off.Magnitude > 0.1 and math.atan2(off.Z, off.X) or 0     -- start where you already are around them
+		local c0 = tRoot.Position                                              -- FIXED centre: the spot on the ground right under where they are now
+		local groundY = r.Position.Y                                           -- you stay at ground level (you're on the ground, they're in the air)
 		pressQ()
 		local t0 = tick()
 		local conn
 		conn = RunService.Heartbeat:Connect(function()
-			local rr, tr = root(me.Character), root(target)
-			if not rr or not tr or not tr.Parent then return end
+			local rr = root(me.Character)
+			if not rr then return end
 			local u = math.clamp((tick() - t0) / LOOP_TIME, 0, 1)
 			local a = a0 + math.rad(LOOP_SWEEP) * u
-			local c = tr.Position
-			local pos = Vector3.new(c.X + math.cos(a) * LOOP_RADIUS, c.Y - LOOP_GAP, c.Z + math.sin(a) * LOOP_RADIUS)   -- under them, live
-			rr.CFrame = CFrame.lookAt(pos, Vector3.new(c.X, pos.Y, c.Z) + Vector3.new(0.001, 0, 0))
+			local pos = Vector3.new(c0.X + math.cos(a) * LOOP_RADIUS, groundY, c0.Z + math.sin(a) * LOOP_RADIUS)   -- on the ground, under them
+			rr.CFrame = CFrame.lookAt(pos, Vector3.new(c0.X, pos.Y, c0.Z) + Vector3.new(0.001, 0, 0))
 			zero(rr)
 		end)
 		while tick() - t0 < LOOP_TIME + LOOP_HOLD do RunService.Heartbeat:Wait() end
