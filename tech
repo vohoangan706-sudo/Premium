@@ -384,10 +384,20 @@ local function hookAnim(char)
 				local r = root(me.Character)
 				if r then
 					local c = r.CFrame
-					r.CFrame = c * CFrame.Angles(0, math.rad(REAL_ANGLE), 0)   -- flick 90 left
-					task.wait(REAL_HOLD)
-					r = root(me.Character)
-					if r then r.CFrame = CFrame.new(r.Position) * (c - c.Position) end   -- flick back
+					local rot = c - c.Position
+					local flick = rot * CFrame.Angles(0, math.rad(REAL_ANGLE), 0)   -- 90 left
+					local hh = hum(me.Character)
+					local oldAuto = hh and hh.AutoRotate
+					if hh then hh.AutoRotate = false end
+					local t0 = tick()
+					while tick() - t0 < REAL_HOLD do
+						local rr = root(me.Character)
+						if rr then rr.CFrame = CFrame.new(rr.Position) * flick end
+						RunService.Heartbeat:Wait()
+					end
+					local rr = root(me.Character)
+					if rr then rr.CFrame = CFrame.new(rr.Position) * rot end        -- flick back
+					if hh and oldAuto ~= nil then hh.AutoRotate = oldAuto end
 				end
 			elseif kibaMode == 3 then
 				task.wait(OREO_DELAY)
@@ -698,6 +708,14 @@ local loopBtn  = extButton("Loop dash: OFF", 40)
 local oreoBtn  = extButton("Oreo tech: OFF", 76)
 local realBtn  = extButton("Real Oreo tech: OFF", 112)
 
+local oreoImage = OREO_ID
+pcall(function()
+	-- 14208470936 is a decal id; a decal's real image id sits inside it
+	local objs = game:GetObjects(OREO_ID)
+	local d = objs and objs[1]
+	if d and d:IsA("Decal") and d.Texture ~= "" then oreoImage = d.Texture end
+end)
+
 runOreo = function()
 	for i = 1, OREO_COUNT do
 		local img = Instance.new("ImageLabel")
@@ -707,7 +725,7 @@ runOreo = function()
 		img.Position = UDim2.new(0.25 + math.random() * 0.5, 0, 0.25 + math.random() * 0.5, 0)
 		img.Rotation = math.random(-25, 25)
 		img.BackgroundTransparency = 1
-		img.Image = OREO_ID
+		img.Image = oreoImage
 		img.ZIndex = 50
 		img.Parent = gui
 		task.delay(0.6, function() img:Destroy() end)
