@@ -1,0 +1,746 @@
+--[[
+  TECH panel (black + gold)
+  * Drawing space: red dot = "me", gold dot = "target". Drag inside the pad to draw the dash path, starting from
+    your "me" dot. The path is stored relative to the target dot (pad-up = the direction from you to the target,
+    pad-right = your right), so it is replayed around the target's LIVE position. "Clear" resets it to a straight
+    line me -> target.
+  * Toggle "Tech": while ON, when YOUR uppercut animation (10503381238) plays and a player is within
+    TRIGGER_RANGE studs - a player or the Weakest Dummy (nearest = target), it immediately:
+        press Q  >  you dash along the drawn path
+        at Magnet delay  : you get pinned next to the target (behind them; under them in Floater mode)
+        at Flip delay    : you jump (Jumppower)
+        at Cancel delay  : everything stops and your velocity is zeroed
+  * Settings under the pad: Jumppower, Flip delay, Cancel delay, Magnet delay (seconds), Dash range (studs the
+    pad's half-width stands for - bigger = longer dash). "Floater" toggle = keep yourself under the floating target.
+  * "Kiba tech auto" button (alternative to Tech): uppercut > 0.22s > dash + flick: you sit 0 studs BELOW the airborne
+    target, body pitched 90 degrees (face-up), for 1s. KIBA_DELAY / KIBA_GAP / KIBA_HOLD near the top.
+  * Side panel ("..."): Loop dash = uppercut > 0.2s > a full 360 dash around the target, circling under them.
+  I could not find a clear definition of these in-game terms; the meanings above are my reading. Untested in Roblox.
+]]
+
+if getgenv().TechPanelStop then pcall(getgenv().TechPanelStop) end
+
+local Players  = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UIS      = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local VIM      = game:GetService("VirtualInputManager")
+local GuiService = game:GetService("GuiService")
+local me       = Players.LocalPlayer
+
+local function root(c) return c and c:FindFirstChild("HumanoidRootPart") end
+local function hum(c)  return c and c:FindFirstChildOfClass("Humanoid") end
+local function zero(p) p.AssemblyLinearVelocity, p.AssemblyAngularVelocity = Vector3.zero, Vector3.zero end
+
+------------------------------------------------------------------
+-- settings
+------------------------------------------------------------------
+local S = {
+	JumpPower   = 50,
+	FlipDelay   = 0.15,
+	CancelDelay = 0.45,
+	MagnetDelay = 0.25,
+	DashRange   = 25,
+}
+local floater = false
+local enabled = false
+local kibaMode = 0          -- 0 = off, 1 = Kiba tech auto, 2 = Loop dash
+
+local TRIGGER_RANGE = 20     -- studs: how close the target must be
+local DASH_SPEED    = 150    -- studs/s along the drawn path
+local COOLDOWN      = 1.5    -- seconds between triggers
+local UPPERCUT_ID = "10503381238"
+local DASH_ID     = "10479335397"      -- the game's Q dash animation
+local LOOP_DELAY     = 0.2     -- Loop dash: seconds after the uppercut animation starts
+local LOOP_TIME      = 0.3     -- Loop dash: seconds for the circling dash
+local LOOP_SWEEP     = 360     -- Loop dash: degrees travelled around the target
+local LOOP_GAP       = 3       -- Loop dash: studs BELOW the target that you circle at
+local LOOP_RADIUS    = 5       -- Loop dash: radius of the circle under the target (studs)
+local LOOP_HOLD      = 0.2     -- Loop dash: seconds you stay under them afterwards
+local KIBA_DELAY    = 0.3     -- Kiba: seconds after the uppercut animation starts, then dash + flick
+local KIBA_GAP      = 0       -- Kiba: studs BELOW the target
+local KIBA_HOLD     = 1       -- Kiba: seconds you stay under them, body flipped face-up
+local DASH_TO_TECH  = 0.1     -- seconds between the dash appearing and the tech starting
+local DASH_WAIT_MAX = 0.5     -- max seconds to wait for the dash to appear after Q before starting anyway
+local START_DELAY   = 0.2    -- seconds after the uppercut animation starts before the tech begins (target is airborne by then)
+
+------------------------------------------------------------------
+-- palette
+------------------------------------------------------------------
+local BG       = Color3.fromRGB(12, 12, 12)
+local GOLD     = Color3.fromRGB(235, 190, 30)
+local GOLD_DIM = Color3.fromRGB(190, 150, 35)
+local FILL     = Color3.fromRGB(62, 48, 8)
+local FILL_ON  = Color3.fromRGB(235, 190, 30)
+local ROW      = Color3.fromRGB(24, 20, 8)
+local RED      = Color3.fromRGB(235, 40, 40)
+local FONT     = Enum.Font.Code
+
+------------------------------------------------------------------
+-- drawing pad geometry (pixels inside the pad)
+------------------------------------------------------------------
+local PAD_W, PAD_H = 220, 110
+local ME_PX     = Vector2.new(PAD_W / 2, PAD_H / 2 + 14)   -- near the middle, close to the target
+local TARGET_PX = Vector2.new(PAD_W / 2, PAD_H / 2 - 14)
+local path = { ME_PX, TARGET_PX }        -- pad pixel points, drawn path
+
+------------------------------------------------------------------
+-- tech
+------------------------------------------------------------------
+local busy = false
+local lastTrigger = 0
+local origJump, origUseJump
+
+-- PC: press the Q key. Mobile: press the on-screen dash button (found in PlayerGui by name/text).
+local IS_MOBILE = UIS.TouchEnabled and not UIS.KeyboardEnabled
+local DASH_BUTTON_NAME = ""          -- set this to the exact button name if auto-detect picks the wrong one
+local dashButton
+local lastScan, warned = 0, false
+
+local function findDashButton()
+	if dashButton and dashButton.Parent then return dashButton end
+	dashButton = nil
+	if tick() - lastScan < 1 then return nil end
+	lastScan = tick()
+	local pg = me:FindFirstChild("PlayerGui")
+	if not pg then return nil end
+	local best
+	for _, d in ipairs(pg:GetDescendants()) do
+		if d:IsA("GuiButton") and not d:FindFirstAncestor("TechPanelUI") then
+			local name = d.Name:lower()
+			local text = (d:IsA("TextButton") and d.Text or ""):lower()
+			local hit
+			if DASH_BUTTON_NAME ~= "" then hit = d.Name == DASH_BUTTON_NAME
+			else hit = name == "dash" or text == "dash" or name:find("dash", 1, true) ~= nil or text:find("dash", 1, true) ~= nil end
+			if hit then
+				if name == "dash" then best = d break end
+				best = best or d
+			end
+		end
+	end
+	if best then
+		dashButton = best
+		warn("[Tech] dash button: " .. best:GetFullName())
+	elseif not warned then
+		warned = true
+		warn("[Tech] no dash button found in PlayerGui - falling back to the Q key. Tell me the button's name (or set DASH_BUTTON_NAME)")
+	end
+	return dashButton
+end
+
+local function pressButton(btn)
+	local fs = rawget(getgenv(), "firesignal")
+	if type(fs) == "function" then
+		for _, sig in ipairs({ "MouseButton1Down", "MouseButton1Click", "Activated", "MouseButton1Up" }) do
+			pcall(function() fs(btn[sig]) end)
+		end
+	end
+	local gc = rawget(getgenv(), "getconnections")
+	if type(gc) == "function" then
+		for _, sig in ipairs({ "Activated", "MouseButton1Click", "MouseButton1Down" }) do
+			pcall(function()
+				for _, c in ipairs(gc(btn[sig])) do pcall(function() c:Fire() end) end
+			end)
+		end
+	end
+	if not fs and not gc then       -- no executor helpers: a real touch on the button
+		pcall(function()
+			local gui = btn:FindFirstAncestorOfClass("ScreenGui")
+			local dy = (gui and gui.IgnoreGuiInset) and 0 or GuiService:GetGuiInset().Y
+			local c = btn.AbsolutePosition + btn.AbsoluteSize / 2
+			VIM:SendTouchEvent(1, 0, c.X, c.Y + dy)
+			task.wait(0.03)
+			VIM:SendTouchEvent(1, 2, c.X, c.Y + dy)
+		end)
+	end
+end
+
+local function pressQ()
+	if IS_MOBILE then
+		local btn = findDashButton()
+		if btn then pressButton(btn) return end
+	end
+	VIM:SendKeyEvent(true, Enum.KeyCode.Q, false, game)
+	task.wait(0.03)
+	VIM:SendKeyEvent(false, Enum.KeyCode.Q, false, game)
+end
+
+-- pad point -> world position around the target
+local function padToWorld(px, tRootPos, fwd, right, y)
+	local off = px - TARGET_PX
+	local studsPerPx = S.DashRange / (PAD_W / 2)
+	local flat = right * (off.X * studsPerPx) + fwd * (-off.Y * studsPerPx)   -- pad-up = forward
+	return Vector3.new(tRootPos.X + flat.X, y, tRootPos.Z + flat.Z)
+end
+
+local function runTech(target)
+	if busy then return end
+	busy = true
+	lastTrigger = tick()
+
+	local ok, err = pcall(function()
+		local r, h = root(me.Character), hum(me.Character)
+		local tRoot = root(target)
+		if not r or not h or not tRoot then return end
+
+		local toT = Vector3.new(tRoot.Position.X - r.Position.X, 0, tRoot.Position.Z - r.Position.Z)
+		local fwd = toT.Magnitude > 0.1 and toT.Unit or Vector3.new(0, 0, -1)
+		local right = fwd:Cross(Vector3.yAxis)
+		local myY = r.Position.Y
+
+		-- cumulative pad length along the drawn path
+		local lens, total = { 0 }, 0
+		for i = 2, #path do
+			total += (path[i] - path[i - 1]).Magnitude
+			lens[i] = total
+		end
+		local studsPerPx = S.DashRange / (PAD_W / 2)
+		local totalStuds = total * studsPerPx
+
+		-- Q is pressed FIRST; the tech starts only once the game's dash actually appears
+		-- (= the dash animation DASH_ID starts on my character), or after DASH_WAIT_MAX seconds as a fallback
+		local dashSeen = false
+		local dashConn = h.AnimationPlayed:Connect(function(tr)
+			if tostring(tr.Animation.AnimationId):find(DASH_ID, 1, true) then dashSeen = true end
+		end)
+		pressQ()
+		local qAt = tick()
+		while not dashSeen and tick() - qAt < DASH_WAIT_MAX do RunService.Heartbeat:Wait() end
+		dashConn:Disconnect()
+		local waitEnd = tick() + DASH_TO_TECH         -- dash appeared > wait > tech
+		while tick() < waitEnd do RunService.Heartbeat:Wait() end
+
+		local t0 = tick()
+		local flipped = false
+		local done = false
+		local conn
+		conn = RunService.Heartbeat:Connect(function()
+			local rr = root(me.Character)
+			local tr = root(target)
+			if done or not rr or not tr or not tr.Parent then done = true return end
+			local el = tick() - t0
+
+			local pos
+			if el >= S.MagnetDelay then
+				-- magnet phase: stay next to the target (under them in floater mode)
+				local base = tr.Position
+				if floater then
+					pos = base - Vector3.new(0, 3.5, 0)
+				else
+					pos = base - tr.CFrame.LookVector * 3
+				end
+			else
+				-- follow the drawn path
+				local dist = math.min(el * DASH_SPEED, totalStuds)
+				local pxDist = studsPerPx > 0 and dist / studsPerPx or 0
+				local i = 2
+				while i < #path and lens[i] < pxDist do i += 1 end
+				local a, b = path[i - 1], path[i]
+				local seg = lens[i] - lens[i - 1]
+				local f = seg > 0 and math.clamp((pxDist - lens[i - 1]) / seg, 0, 1) or 1
+				pos = padToWorld(a:Lerp(b, f), tr.Position, fwd, right, myY)
+			end
+			local look = Vector3.new(tr.Position.X, pos.Y, tr.Position.Z)
+			if (look - pos).Magnitude > 0.05 then
+				rr.CFrame = CFrame.lookAt(pos, look)
+			else
+				rr.CFrame = CFrame.new(pos)      -- standing exactly on the target's axis: lookAt would give a NaN CFrame (= void)
+			end
+			zero(rr)
+
+			if not flipped and el >= S.FlipDelay then
+				flipped = true
+				local hh = hum(me.Character)
+				if hh then hh.Jump = true end
+			end
+			if el >= S.CancelDelay then done = true end
+		end)
+		while not done do RunService.Heartbeat:Wait() end
+		conn:Disconnect()
+		local rr = root(me.Character)
+		if rr then zero(rr) end
+	end)
+	if not ok then warn("[Tech] " .. tostring(err)) end
+	busy = false
+end
+
+-- detect an uppercut: my own uppercut animation plays (id 10503381238); target = nearest player in range
+local animConn
+
+-- targets are character MODELS: real players' characters + the TSB "Weakest Dummy" (workspace.Live)
+local function nearestTarget(maxRange)
+	local r = root(me.Character)
+	if not r then return nil end
+	local candidates = {}
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= me and p.Character then table.insert(candidates, p.Character) end
+	end
+	local live = workspace:FindFirstChild("Live")
+	local dummy = live and live:FindFirstChild("Weakest Dummy")
+	if dummy then table.insert(candidates, dummy) end
+
+	local best, bestD = nil, maxRange or TRIGGER_RANGE
+	for _, m in ipairs(candidates) do
+		local tr, th = root(m), hum(m)
+		if tr and th and th.Health > 0 then
+			local d = (tr.Position - r.Position).Magnitude
+			if d <= bestD then best, bestD = m, d end
+		end
+	end
+	return best
+end
+
+-- Kiba tech: uppercut > wait > dash + flick 90 degrees so you sit KIBA_GAP studs under the (airborne) target,
+-- your whole body turned face-up
+local function runKiba(target, chained)
+	if busy and not chained then return end
+	busy = true
+	lastTrigger = tick()
+	local ok, err = pcall(function()
+		local r = root(me.Character)
+		local tRoot = root(target)
+		if not r or not tRoot then return end
+		local flat = Vector3.new(tRoot.Position.X - r.Position.X, 0, tRoot.Position.Z - r.Position.Z)
+		local fwd = flat.Magnitude > 0.1 and flat.Unit or Vector3.new(0, 0, -1)
+
+		task.spawn(pressQ)                             -- the dash ...
+		local t0 = tick()
+		local conn
+		conn = RunService.Heartbeat:Connect(function()  -- ... + the flick, from the same moment
+			local rr = root(me.Character)
+			local tr = root(target)
+			if not rr or not tr or not tr.Parent then return end
+			local pos = tr.Position - Vector3.new(0, KIBA_GAP, 0)     -- follows the target, KIBA_GAP studs below
+			rr.CFrame = CFrame.lookAt(pos, pos + fwd) * CFrame.Angles(math.rad(90), 0, 0)   -- pitched 90: facing up
+			zero(rr)
+		end)
+		while tick() - t0 < KIBA_HOLD do RunService.Heartbeat:Wait() end
+		conn:Disconnect()
+		local rr = root(me.Character)                  -- stand back upright
+		if rr then
+			rr.CFrame = CFrame.lookAt(rr.Position, rr.Position + fwd)
+			zero(rr)
+		end
+	end)
+	if not ok then warn("[Tech/Kiba] " .. tostring(err)) end
+	busy = false
+end
+
+-- Loop dash: uppercut > LOOP_DELAY > a full 360 degree dash around the target, circling LOOP_GAP studs BELOW them
+local function runLoop(target)
+	if busy then return end
+	busy = true
+	lastTrigger = tick()
+	local ok, err = pcall(function()
+		local r, tRoot = root(me.Character), root(target)
+		if not r or not tRoot then return end
+		local off = Vector3.new(r.Position.X - tRoot.Position.X, 0, r.Position.Z - tRoot.Position.Z)
+		local a0 = off.Magnitude > 0.1 and math.atan2(off.Z, off.X) or 0     -- start where you already are around them
+		pressQ()
+		local t0 = tick()
+		local conn
+		conn = RunService.Heartbeat:Connect(function()
+			local rr, tr = root(me.Character), root(target)
+			if not rr or not tr or not tr.Parent then return end
+			local u = math.clamp((tick() - t0) / LOOP_TIME, 0, 1)
+			local a = a0 + math.rad(LOOP_SWEEP) * u
+			local c = tr.Position
+			local pos = Vector3.new(c.X + math.cos(a) * LOOP_RADIUS, c.Y - LOOP_GAP, c.Z + math.sin(a) * LOOP_RADIUS)   -- under them, live
+			rr.CFrame = CFrame.lookAt(pos, Vector3.new(c.X, pos.Y, c.Z) + Vector3.new(0.001, 0, 0))
+			zero(rr)
+		end)
+		while tick() - t0 < LOOP_TIME + LOOP_HOLD do RunService.Heartbeat:Wait() end
+		conn:Disconnect()
+		local rr = root(me.Character)
+		if rr then zero(rr) end
+	end)
+	if not ok then warn("[Tech/Loop] " .. tostring(err)) end
+	busy = false
+end
+
+local function hookAnim(char)
+	if animConn then animConn:Disconnect() animConn = nil end
+	local h = hum(char) or (char and char:WaitForChild("Humanoid", 5))
+	if not h then return end
+	animConn = h.AnimationPlayed:Connect(function(track)
+		local id = tostring(track.Animation.AnimationId)
+		local isUpper = id:find(UPPERCUT_ID, 1, true) ~= nil
+		if not isUpper then return end
+		-- the uppercut drives Tech and "Kiba tech auto"
+		if not (enabled or kibaMode > 0) or busy or tick() - lastTrigger < COOLDOWN then return end
+		lastTrigger = tick()
+		task.spawn(function()
+			if kibaMode == 2 then
+				task.wait(LOOP_DELAY)
+				if kibaMode ~= 2 then return end
+				local t = nearestTarget()
+				if t then runLoop(t) end
+			elseif kibaMode == 1 then
+				task.wait(KIBA_DELAY)
+				if kibaMode ~= 1 then return end
+				local t = nearestTarget()
+				if t then runKiba(t) end
+			else
+				task.wait(START_DELAY)
+				if not enabled then return end
+				local t = nearestTarget()
+				if t then runTech(t) end
+			end
+		end)
+	end)
+end
+task.spawn(hookAnim, me.Character)
+
+local function applyJump(on)
+	local h = hum(me.Character)
+	if not h then return end
+	if on then
+		if origJump == nil then origJump, origUseJump = h.JumpPower, h.UseJumpPower end
+		h.UseJumpPower = true
+		h.JumpPower = S.JumpPower
+	elseif origJump ~= nil then
+		h.UseJumpPower = origUseJump
+		h.JumpPower = origJump
+		origJump, origUseJump = nil, nil
+	end
+end
+
+local charConn = me.CharacterAdded:Connect(function(char)
+	origJump, origUseJump = nil, nil
+	task.wait(0.5)
+	hookAnim(char)
+	if enabled then applyJump(true) end
+end)
+
+------------------------------------------------------------------
+-- panel
+------------------------------------------------------------------
+local gui = Instance.new("ScreenGui")
+gui.Name = "TechPanelUI"
+gui.ResetOnSpawn = false
+gui.DisplayOrder = 999
+gui.IgnoreGuiInset = true
+if not pcall(function() gui.Parent = game.CoreGui end) or not gui.Parent then
+	gui.Parent = me:WaitForChild("PlayerGui")
+end
+
+local function round(obj, r) Instance.new("UICorner", obj).CornerRadius = UDim.new(0, r) end
+
+local main = Instance.new("Frame")
+main.Size = UDim2.new(0, 245, 0, 366)
+main.Position = UDim2.new(0, 12, 0.5, -183)
+main.BackgroundColor3 = BG
+main.BorderSizePixel = 0
+main.Active = true
+main.Parent = gui
+round(main, 8)
+local stroke = Instance.new("UIStroke")
+stroke.Color, stroke.Thickness, stroke.Parent = GOLD, 2, main
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, -52, 0, 24)
+title.Position = UDim2.new(0, 10, 0, 8)
+title.BackgroundTransparency = 1
+title.Font, title.TextSize, title.TextColor3 = FONT, 19, GOLD
+title.TextXAlignment = Enum.TextXAlignment.Left
+title.Text = "Tech"
+title.Parent = main
+
+-- drag the panel by the title only (so drawing on the pad doesn't move it)
+do
+	local dragging, startPos, startInput
+	title.Active = true
+	title.InputBegan:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+			dragging, startPos, startInput = true, main.Position, i.Position
+		end
+	end)
+	UIS.InputChanged:Connect(function(i)
+		if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+			local d = i.Position - startInput
+			main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+		end
+	end)
+	UIS.InputEnded:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then dragging = false end
+	end)
+end
+
+local closeBtn = Instance.new("TextButton")
+closeBtn.Size = UDim2.new(0, 28, 0, 24)
+closeBtn.Position = UDim2.new(1, -36, 0, 8)
+closeBtn.BackgroundColor3 = FILL
+closeBtn.BorderSizePixel = 0
+closeBtn.Font, closeBtn.TextSize, closeBtn.TextColor3, closeBtn.Text = FONT, 16, GOLD, "x"
+closeBtn.Parent = main
+round(closeBtn, 6)
+
+-- drawing pad
+local pad = Instance.new("Frame")
+pad.Size = UDim2.new(0, PAD_W, 0, PAD_H)
+pad.Position = UDim2.new(0.5, -PAD_W / 2, 0, 36)
+pad.BackgroundColor3 = ROW
+pad.BorderSizePixel = 0
+pad.ClipsDescendants = true
+pad.Active = true
+pad.Parent = main
+round(pad, 6)
+local padStroke = Instance.new("UIStroke")
+padStroke.Color, padStroke.Thickness, padStroke.Parent = GOLD_DIM, 1, pad
+
+local lineLayer = Instance.new("Folder")
+lineLayer.Parent = pad
+
+local function dot(px, color, label)
+	local d = Instance.new("Frame")
+	d.Size = UDim2.new(0, 12, 0, 12)
+	d.AnchorPoint = Vector2.new(0.5, 0.5)
+	d.Position = UDim2.new(0, px.X, 0, px.Y)
+	d.BackgroundColor3 = color
+	d.BorderSizePixel = 0
+	d.ZIndex = 5
+	d.Parent = pad
+	round(d, 6)
+	local t = Instance.new("TextLabel")
+	t.Size = UDim2.new(0, 50, 0, 12)
+	t.Position = UDim2.new(0.5, -25, 1, 1)
+	t.BackgroundTransparency = 1
+	t.Font, t.TextSize, t.TextColor3, t.Text = FONT, 11, color, label
+	t.ZIndex = 5
+	t.Parent = d
+end
+dot(ME_PX, RED, "me")
+dot(TARGET_PX, GOLD, "target")
+
+local function seg(a, b)
+	local d = b - a
+	local f = Instance.new("Frame")
+	f.Size = UDim2.new(0, d.Magnitude + 1, 0, 2)
+	f.AnchorPoint = Vector2.new(0.5, 0.5)
+	local mid = (a + b) / 2
+	f.Position = UDim2.new(0, mid.X, 0, mid.Y)
+	f.Rotation = math.deg(math.atan2(d.Y, d.X))
+	f.BackgroundColor3 = GOLD
+	f.BorderSizePixel = 0
+	f.Parent = lineLayer
+end
+
+local function redraw()
+	lineLayer:ClearAllChildren()
+	for i = 2, #path do seg(path[i - 1], path[i]) end
+end
+redraw()
+
+local drawing = false
+local function padPoint(input)
+	local p = Vector2.new(input.Position.X, input.Position.Y) - pad.AbsolutePosition
+	return Vector2.new(math.clamp(p.X, 0, PAD_W), math.clamp(p.Y, 0, PAD_H))
+end
+
+-- A press on the pad only STARTS a new drawing once the finger/mouse actually moves; a tap (or a press anywhere
+-- else) never touches the saved path. Only the input that started the drawing can continue or end it.
+local drawInput, working
+pad.InputBegan:Connect(function(i)
+	if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+		drawing, drawInput, working = true, i, { ME_PX }
+	end
+end)
+UIS.InputChanged:Connect(function(i)
+	if not drawing or not working then return end
+	local isMove = (drawInput.UserInputType == Enum.UserInputType.MouseButton1 and i.UserInputType == Enum.UserInputType.MouseMovement)
+		or (i == drawInput)
+	if not isMove then return end
+	local p = padPoint(i)
+	if (p - working[#working]).Magnitude >= 4 and #working < 80 then
+		table.insert(working, p)
+		if #working == 2 then          -- first real movement: replace the old drawing
+			path = working
+			redraw()
+		else
+			seg(working[#working - 1], working[#working])
+		end
+	end
+end)
+UIS.InputEnded:Connect(function(i)
+	if drawing and (i == drawInput or (drawInput and drawInput.UserInputType == Enum.UserInputType.MouseButton1 and i.UserInputType == Enum.UserInputType.MouseButton1)) then
+		drawing, drawInput, working = false, nil, nil
+	end
+end)
+
+-- buttons / settings
+local function button(text, x, y, w, h)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.new(0, w, 0, h)
+	b.Position = UDim2.new(0, x, 0, y)
+	b.BackgroundColor3 = FILL
+	b.BorderSizePixel = 0
+	b.Font, b.TextSize, b.TextColor3, b.Text = FONT, 14, GOLD, text
+	b.Parent = main
+	round(b, 6)
+	return b
+end
+local function paint(b, on)
+	b.BackgroundColor3 = on and FILL_ON or FILL
+	b.TextColor3 = on and BG or GOLD
+end
+
+local toggleBtn  = button("Tech: OFF", 12, 152, 140, 26)
+local clearBtn   = button("Clear", 158, 152, 75, 26)
+
+local function setting(label, key, y)
+	local l = Instance.new("TextLabel")
+	l.Size = UDim2.new(0, 140, 0, 20)
+	l.Position = UDim2.new(0, 12, 0, y)
+	l.BackgroundTransparency = 1
+	l.Font, l.TextSize, l.TextColor3 = FONT, 13, GOLD_DIM
+	l.TextXAlignment = Enum.TextXAlignment.Left
+	l.Text = label
+	l.Parent = main
+	local tb = Instance.new("TextBox")
+	tb.Size = UDim2.new(0, 81, 0, 20)
+	tb.Position = UDim2.new(0, 152, 0, y)
+	tb.BackgroundColor3 = ROW
+	tb.BorderSizePixel = 0
+	tb.Font, tb.TextSize, tb.TextColor3 = FONT, 13, GOLD
+	tb.ClearTextOnFocus = false
+	tb.Text = tostring(S[key])
+	tb.Parent = main
+	round(tb, 5)
+	tb.FocusLost:Connect(function()
+		local v = tonumber(tb.Text)
+		if v and v >= 0 then
+			S[key] = v
+			if key == "JumpPower" and enabled then applyJump(true) end
+		end
+		tb.Text = tostring(S[key])
+	end)
+end
+
+setting("1. Jumppower",    "JumpPower",   184)
+setting("2. Flip delay",   "FlipDelay",   206)
+setting("3. Cancel delay", "CancelDelay", 228)
+setting("4. Magnet delay", "MagnetDelay", 250)
+setting("5. Dash range",   "DashRange",   272)
+
+local floaterBtn = button("Floater mode: OFF", 12, 300, 221, 26)
+local kibaBtn    = button("Kiba tech auto: OFF", 12, 330, 221, 26)
+
+local function refresh()
+	toggleBtn.Text = enabled and "Tech: ON" or "Tech: OFF"
+	paint(toggleBtn, enabled)
+	floaterBtn.Text = floater and "Floater mode: ON" or "Floater mode: OFF"
+	paint(floaterBtn, floater)
+	kibaBtn.Text = kibaMode == 1 and "Kiba tech auto: ON" or "Kiba tech auto: OFF"
+	paint(kibaBtn, kibaMode == 1)
+end
+refresh()
+
+-- side panel: a "..." tab on the right edge slides a second panel out to the right
+local EXT_W = 150
+local EXT_PAD = 30            -- room at the panel's edge for the tab
+local ext = Instance.new("Frame")
+ext.Size = UDim2.new(0, 0, 1, 0)
+ext.Position = UDim2.new(1, 0, 0, 0)   -- grows out of the panel's right edge
+ext.Visible = false                   -- hidden while closed (no leftover yellow line)
+ext.ZIndex = 1
+ext.BackgroundColor3 = BG
+ext.BorderSizePixel = 0
+ext.ClipsDescendants = true
+ext.Parent = main
+round(ext, 8)
+local extStroke = Instance.new("UIStroke")
+extStroke.Color, extStroke.Thickness, extStroke.Parent = GOLD, 2, ext
+
+local extTitle = Instance.new("TextLabel")
+extTitle.Size = UDim2.new(0, EXT_W - 20, 0, 24)
+extTitle.Position = UDim2.new(0, EXT_PAD + 10, 0, 8)
+extTitle.BackgroundTransparency = 1
+extTitle.Font, extTitle.TextSize, extTitle.TextColor3 = FONT, 17, GOLD
+extTitle.TextXAlignment = Enum.TextXAlignment.Left
+extTitle.Text = "More"
+extTitle.Parent = ext
+
+local function extButton(text, y)
+	local b = Instance.new("TextButton")
+	b.Size = UDim2.new(0, EXT_W - 20, 0, 30)
+	b.Position = UDim2.new(0, EXT_PAD + 10, 0, y)
+	b.BackgroundColor3 = FILL
+	b.BorderSizePixel = 0
+	b.Font, b.TextSize, b.TextColor3, b.Text = FONT, 13, GOLD, text
+	b.Parent = ext
+	round(b, 6)
+	return b
+end
+local loopBtn  = extButton("Loop dash: OFF", 40)
+
+local extOpen = false
+local tab = Instance.new("TextButton")
+tab.Size = UDim2.new(0, 24, 0, 64)
+tab.Position = UDim2.new(1, 2, 0.5, -32)
+tab.BackgroundColor3 = FILL
+tab.BorderSizePixel = 0
+tab.Font, tab.TextSize, tab.TextColor3, tab.Text = FONT, 16, GOLD, "..."
+tab.ZIndex = 10
+tab.Parent = main
+round(tab, 6)
+local tabStroke = Instance.new("UIStroke")
+tabStroke.Color, tabStroke.Thickness, tabStroke.Parent = GOLD, 1, tab
+
+tab.MouseButton1Click:Connect(function()
+	extOpen = not extOpen
+	tab.Text = extOpen and "<" or "..."
+	if extOpen then ext.Visible = true end
+	local tw = TweenService:Create(ext, TweenInfo.new(0.28, Enum.EasingStyle.Quad, extOpen and Enum.EasingDirection.Out or Enum.EasingDirection.In),
+		{ Size = UDim2.new(0, extOpen and (EXT_W + EXT_PAD) or 0, 1, 0) })
+	tw.Completed:Connect(function()
+		if not extOpen then ext.Visible = false end
+	end)
+	tw:Play()
+end)
+
+local function refreshExt()
+	loopBtn.Text = kibaMode == 2 and "Loop dash: ON" or "Loop dash: OFF"
+	paint(loopBtn, kibaMode == 2)
+end
+local baseRefresh = refresh
+refresh = function() baseRefresh() refreshExt() end
+refreshExt()
+
+loopBtn.MouseButton1Click:Connect(function()
+	kibaMode = (kibaMode == 2) and 0 or 2
+	if kibaMode > 0 then enabled = false applyJump(false) end
+	refresh()
+end)
+toggleBtn.MouseButton1Click:Connect(function()
+	enabled = not enabled
+	if enabled then kibaMode = 0 end              -- Tech and Kiba are alternatives
+	applyJump(enabled)
+	refresh()
+end)
+kibaBtn.MouseButton1Click:Connect(function()
+	kibaMode = (kibaMode == 1) and 0 or 1
+	if kibaMode > 0 then enabled = false applyJump(false) end
+	refresh()
+end)
+floaterBtn.MouseButton1Click:Connect(function()
+	floater = not floater
+	refresh()
+end)
+clearBtn.MouseButton1Click:Connect(function()
+	path = { ME_PX, TARGET_PX }
+	redraw()
+end)
+
+getgenv().TechPanelStop = function()
+	enabled = false
+	kibaMode = 0
+
+	applyJump(false)
+	if animConn then animConn:Disconnect() animConn = nil end
+	if charConn then charConn:Disconnect() charConn = nil end
+	gui:Destroy()
+end
+
+closeBtn.MouseButton1Click:Connect(function()
+	getgenv().TechPanelStop()
+end)
