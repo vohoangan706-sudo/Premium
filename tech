@@ -44,13 +44,21 @@ local S = {
 }
 local floater = false
 local enabled = false
-local kibaMode = 0          -- 0 = off, 1 = Kiba tech auto, 2 = Loop dash
+local kibaMode = 0          -- 0 = off, 1 = Kiba tech auto, 2 = Loop dash, 3 = Oreo tech
+local runOreo               -- defined below, once the gui exists
 
 local TRIGGER_RANGE = 20     -- studs: how close the target must be
 local DASH_SPEED    = 150    -- studs/s along the drawn path
 local COOLDOWN      = 1.5    -- seconds between triggers
 local UPPERCUT_ID = "10503381238"
 local DASH_ID     = "10479335397"      -- the game's Q dash animation
+local OREO_ID        = "rbxassetid://14208470936"   -- the Oreo decal
+local OREO_DELAY     = 0.3     -- Oreo tech: seconds after the uppercut animation starts
+local REAL_DELAY     = 0.2     -- Real Oreo tech: seconds after the uppercut starts
+local REAL_ANGLE     = 90      -- degrees flicked to the left
+local REAL_HOLD      = 0.1     -- seconds held at the flicked angle before flicking back
+local OREO_COUNT     = 5       -- how many times the decal is spammed
+local OREO_GAP       = 0.12    -- seconds between each one
 local LOOP_DELAY     = 0.3     -- Loop dash: seconds after the uppercut animation starts
 local LOOP_TIME      = 0.7     -- Loop dash: seconds for the circling dash
 local LOOP_SWEEP     = 360     -- Loop dash: degrees travelled around the target
@@ -370,7 +378,22 @@ local function hookAnim(char)
 		if not (enabled or kibaMode > 0) or busy or tick() - lastTrigger < COOLDOWN then return end
 		lastTrigger = tick()
 		task.spawn(function()
-			if kibaMode == 2 then
+			if kibaMode == 4 then
+				task.wait(REAL_DELAY)
+				if kibaMode ~= 4 then return end
+				local r = root(me.Character)
+				if r then
+					local c = r.CFrame
+					r.CFrame = c * CFrame.Angles(0, math.rad(REAL_ANGLE), 0)   -- flick 90 left
+					task.wait(REAL_HOLD)
+					r = root(me.Character)
+					if r then r.CFrame = CFrame.new(r.Position) * (c - c.Position) end   -- flick back
+				end
+			elseif kibaMode == 3 then
+				task.wait(OREO_DELAY)
+				if kibaMode ~= 3 then return end
+				runOreo()
+			elseif kibaMode == 2 then
 				task.wait(LOOP_DELAY)
 				if kibaMode ~= 2 then return end
 				local t = nearestTarget()
@@ -672,6 +695,25 @@ local function extButton(text, y)
 	return b
 end
 local loopBtn  = extButton("Loop dash: OFF", 40)
+local oreoBtn  = extButton("Oreo tech: OFF", 76)
+local realBtn  = extButton("Real Oreo tech: OFF", 112)
+
+runOreo = function()
+	for i = 1, OREO_COUNT do
+		local img = Instance.new("ImageLabel")
+		local sz = math.random(110, 190)
+		img.Size = UDim2.new(0, sz, 0, sz)
+		img.AnchorPoint = Vector2.new(0.5, 0.5)
+		img.Position = UDim2.new(0.25 + math.random() * 0.5, 0, 0.25 + math.random() * 0.5, 0)
+		img.Rotation = math.random(-25, 25)
+		img.BackgroundTransparency = 1
+		img.Image = OREO_ID
+		img.ZIndex = 50
+		img.Parent = gui
+		task.delay(0.6, function() img:Destroy() end)
+		task.wait(OREO_GAP)
+	end
+end
 
 local extOpen = false
 local tab = Instance.new("TextButton")
@@ -701,6 +743,10 @@ end)
 local function refreshExt()
 	loopBtn.Text = kibaMode == 2 and "Loop dash: ON" or "Loop dash: OFF"
 	paint(loopBtn, kibaMode == 2)
+	oreoBtn.Text = kibaMode == 3 and "Oreo tech: ON" or "Oreo tech: OFF"
+	paint(oreoBtn, kibaMode == 3)
+	realBtn.Text = kibaMode == 4 and "Real Oreo tech: ON" or "Real Oreo tech: OFF"
+	paint(realBtn, kibaMode == 4)
 end
 local baseRefresh = refresh
 refresh = function() baseRefresh() refreshExt() end
@@ -708,6 +754,16 @@ refreshExt()
 
 loopBtn.MouseButton1Click:Connect(function()
 	kibaMode = (kibaMode == 2) and 0 or 2
+	if kibaMode > 0 then enabled = false applyJump(false) end
+	refresh()
+end)
+realBtn.MouseButton1Click:Connect(function()
+	kibaMode = (kibaMode == 4) and 0 or 4
+	if kibaMode > 0 then enabled = false applyJump(false) end
+	refresh()
+end)
+oreoBtn.MouseButton1Click:Connect(function()
+	kibaMode = (kibaMode == 3) and 0 or 3
 	if kibaMode > 0 then enabled = false applyJump(false) end
 	refresh()
 end)
