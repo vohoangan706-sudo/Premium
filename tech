@@ -54,7 +54,7 @@ local UPPERCUT_ID = "10503381238"
 local DASH_ID     = "10479335397"      -- the game's Q dash animation
 local OREO_ID        = "rbxassetid://14208470936"   -- the Oreo decal
 local OREO_DELAY     = 0.3     -- Oreo tech: seconds after the uppercut animation starts
-local REAL_DELAY     = 0.2     -- Real Oreo tech: seconds after the uppercut starts
+local REAL_DELAY     = 0.15    -- Real Oreo tech: seconds after the uppercut starts
 local REAL_ANGLE     = 90      -- degrees flicked to the left
 local REAL_HOLD      = 0.1     -- seconds held at the flicked angle before flicking back
 local OREO_COUNT     = 5       -- how many times the decal is spammed
@@ -366,6 +366,44 @@ local function runLoop(target)
 	busy = false
 end
 
+-- Real Oreo tech: uppercut > REAL_DELAY > dash (Q) > flick 90 degrees to the left > flick back at the target
+-- (CFrame facing forced every Heartbeat like the Tech button; position is left to the dash)
+local function runReal(target)
+	if busy then return end
+	busy = true
+	lastTrigger = tick()
+	local ok, err = pcall(function()
+		local r, tRoot = root(me.Character), root(target)
+		if not r or not tRoot then return end
+		local p0 = r.Position
+		local look0 = Vector3.new(tRoot.Position.X, p0.Y, tRoot.Position.Z)
+		local face0 = (look0 - p0).Magnitude > 0.05 and CFrame.lookAt(p0, look0) or r.CFrame
+		local leftRot = (face0 * CFrame.Angles(0, math.rad(REAL_ANGLE), 0))
+		leftRot = leftRot - leftRot.Position
+		task.spawn(pressQ)                                   -- dash
+		local t0 = tick()
+		local conn
+		conn = RunService.Heartbeat:Connect(function()
+			local rr = root(me.Character)
+			if not rr then return end
+			local pos = rr.Position                          -- the dash keeps moving me; only the facing is forced
+			if tick() - t0 < REAL_HOLD then
+				rr.CFrame = CFrame.new(pos) * leftRot        -- flick 90 left
+			else
+				local tr = root(target)
+				local tp = tr and tr.Position or look0
+				local lk = Vector3.new(tp.X, pos.Y, tp.Z)
+				if (lk - pos).Magnitude > 0.05 then rr.CFrame = CFrame.lookAt(pos, lk)   -- flick back at the target
+				else rr.CFrame = CFrame.new(pos) * (face0 - face0.Position) end
+			end
+		end)
+		while tick() - t0 < REAL_HOLD + 0.2 do RunService.Heartbeat:Wait() end
+		conn:Disconnect()
+	end)
+	if not ok then warn("[Tech/Real] " .. tostring(err)) end
+	busy = false
+end
+
 local function hookAnim(char)
 	if animConn then animConn:Disconnect() animConn = nil end
 	local h = hum(char) or (char and char:WaitForChild("Humanoid", 5))
@@ -381,24 +419,8 @@ local function hookAnim(char)
 			if kibaMode == 4 then
 				task.wait(REAL_DELAY)
 				if kibaMode ~= 4 then return end
-				local r = root(me.Character)
-				if r then
-					local c = r.CFrame
-					local rot = c - c.Position
-					local flick = rot * CFrame.Angles(0, math.rad(REAL_ANGLE), 0)   -- 90 left
-					local hh = hum(me.Character)
-					local oldAuto = hh and hh.AutoRotate
-					if hh then hh.AutoRotate = false end
-					local t0 = tick()
-					while tick() - t0 < REAL_HOLD do
-						local rr = root(me.Character)
-						if rr then rr.CFrame = CFrame.new(rr.Position) * flick end
-						RunService.Heartbeat:Wait()
-					end
-					local rr = root(me.Character)
-					if rr then rr.CFrame = CFrame.new(rr.Position) * rot end        -- flick back
-					if hh and oldAuto ~= nil then hh.AutoRotate = oldAuto end
-				end
+				local t = nearestTarget()
+				if t then runReal(t) end
 			elseif kibaMode == 3 then
 				task.wait(OREO_DELAY)
 				if kibaMode ~= 3 then return end
