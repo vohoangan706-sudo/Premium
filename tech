@@ -69,7 +69,7 @@ local KIBA_GAP      = 0       -- Kiba: studs BELOW the target
 local KIBA_HOLD     = 0.7       -- Kiba: seconds you stay under them, body flipped face-up
 local DASH_TO_TECH  = 0.1     -- seconds between the dash appearing and the tech starting
 local DASH_WAIT_MAX = 0.5     -- max seconds to wait for the dash to appear after Q before starting anyway
-local START_DELAY   = 0.2    -- seconds after the uppercut animation starts before the tech begins (target is airborne by then)
+local START_DELAY     = 0.25    -- seconds after the uppercut animation starts before the tech begins (target is airborne by then)
 
 ------------------------------------------------------------------
 -- palette
